@@ -1,0 +1,8 @@
+results/*
+__pycache__/*
+data/*
+*tmp*
+wandb/*
+wandb-history/*
+wandb-summary/*
+wandb-summary.json
