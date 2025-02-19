@@ -26,7 +26,8 @@ model = SwitchTransformersForConditionalGeneration.from_pretrained(model_name)
 
 # ------------------------------
 # 1. wandb 초기화 (프로젝트 및 엔터티 설정)
-wandb.init(project=f"samsum-{model_name.replace("/","-")}", name="switch-transformers-baseline")
+wandb.init(project=f"samsum-{model_name.replace('/', '-')}", name="switch-transformers-baseline")
+
 
 # ------------------------------
 # 4. 데이터 전처리: 동적 패딩을 위해 max_length 없이 토크나이즈 (단, truncation은 True로 설정)
