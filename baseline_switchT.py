@@ -56,8 +56,6 @@ rouge_metric = evaluate.load("rouge")
 def compute_metrics(eval_preds):
     preds, labels = eval_preds
     # 만약 튜플로 전달되는 경우 첫 번째 원소 선택
-    print("preds:", preds)
-    print("labels:", labels)
     if isinstance(preds, tuple):
         preds = preds[0]
     
@@ -81,8 +79,8 @@ training_args = Seq2SeqTrainingArguments(
     output_dir="./results/switch_samsum_checkpoints",
     evaluation_strategy="epoch",
     learning_rate=5e-5,
-    per_device_train_batch_size=4,
-    per_device_eval_batch_size=4,
+    per_device_train_batch_size=8,
+    per_device_eval_batch_size=8,
     num_train_epochs=5,
     weight_decay=0.01,
     logging_steps=100,
@@ -121,7 +119,8 @@ labels = test_results.label_ids
 pred_str = tokenizer.batch_decode(predictions, skip_special_tokens=True)
 label_str = tokenizer.batch_decode(np.where(labels != -100, labels, tokenizer.pad_token_id), skip_special_tokens=True)
 final_rouge = rouge_metric.compute(predictions=pred_str, references=label_str)
-final_rouge_scores = {key: value.mid.fmeasure * 100 for key, value in final_rouge.items()}
+final_rouge_scores = {key: value * 100 for key, value in final_rouge.items()}  # .mid.fmeasure 제거
+
 print("Test ROUGE scores:", {k: round(v, 2) for k, v in final_rouge_scores.items()})
 
 # wandb에 테스트 결과 로깅
