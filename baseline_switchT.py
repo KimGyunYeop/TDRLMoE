@@ -107,7 +107,8 @@ def main():
         eval_step_counter += 1
 
         return result
-
+    print("tokenizer token map", tokenizer.special_tokens_map)
+    print("model config:", model.config)
     # ------------------------------
     # 7. Training Arguments 및 Trainer 설정
     # ------------------------------

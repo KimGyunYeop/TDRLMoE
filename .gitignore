@@ -6,3 +6,4 @@ wandb/*
 wandb-history/*
 wandb-summary/*
 wandb-summary.json
+*.yml
