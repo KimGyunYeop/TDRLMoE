@@ -12,18 +12,20 @@ from transformers import (
     Seq2SeqTrainer,
 )
 import os
+import torch
 
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Train Switch Transformer on SAMSum with Seq2SeqTrainer")
     # 모델 및 데이터 관련 인자
-    parser.add_argument("--model_name", type=str, default="google/switch-base-8", help="HuggingFace model identifier")
+    parser.add_argument("--model_name", type=str, default="google/switch-base-16", help="HuggingFace model identifier")
     parser.add_argument("--dataset_name", type=str, default="samsum", help="Dataset name to load")
     # 학습 하이퍼파라미터
     parser.add_argument("--num_train_epochs", type=int, default=10, help="Number of training epochs")
     parser.add_argument("--learning_rate", type=float, default=5e-5, help="Learning rate")
-    parser.add_argument("--per_device_train_batch_size", type=int, default=4, help="Batch size per device during training")
-    parser.add_argument("--per_device_eval_batch_size", type=int, default=4, help="Batch size per device during evaluation")
+    parser.add_argument("--per_device_train_batch_size", type=int, default=2, help="Batch size per device during training")
+    parser.add_argument("--accumulation_steps", type=int, default=None, help="Gradient accumulation steps")
+    parser.add_argument("--per_device_eval_batch_size", type=int, default=2, help="Batch size per device during evaluation")
     parser.add_argument("--save_steps", type=int, default=500, help="Save checkpoint every X updates steps")
     parser.add_argument("--logging_steps", type=int, default=100, help="Log every X updates steps")
     parser.add_argument("--output_dir", type=str, default="./results/switch_samsum_checkpoints", help="Output directory for checkpoints")
@@ -56,7 +58,7 @@ def main():
     # ------------------------------
     tokenizer = AutoTokenizer.from_pretrained(args.model_name)
     model = SwitchTransformersForConditionalGeneration.from_pretrained(args.model_name)
-
+    
     # ------------------------------
     # 4. 데이터 전처리: 동적 패딩을 위해 max_length 없이 토크나이즈 (단, truncation은 True로 설정)
     # ------------------------------
@@ -124,8 +126,6 @@ def main():
         logging_steps=args.logging_steps,
         save_steps=args.save_steps,
         predict_with_generate=True,  # 평가 시 텍스트 생성 활성화
-        generation_max_length=128,    # 예시: 최대 길이 128로 지정
-        generation_num_beams=5,       # 예시: 빔 서치 사용
         report_to=["wandb"],
         run_name=args.run_name,
         seed=args.seed,
@@ -133,7 +133,7 @@ def main():
         adam_beta2=0.999,
         adam_epsilon=1e-08,
         fp16=True,
-        save_total_limit=3  # 최근 3개 체크포인트만 유지
+        save_total_limit=3,  # 최근 3개 체크포인트만 유지
     )
 
     trainer = Seq2SeqTrainer(
@@ -154,7 +154,7 @@ def main():
        # ------------------------------
     # 9. 테스트셋 평가 및 결과 로깅 (pred와 gold 저장 추가)
     # ------------------------------
-    test_results = trainer.predict(tokenized_dataset["test"], gen_kwargs={"max_length":128, "num_beams":5})
+    test_results = trainer.predict(tokenized_dataset["test"])
     predictions = test_results.predictions
     labels = test_results.label_ids
 
