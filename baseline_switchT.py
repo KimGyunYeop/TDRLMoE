@@ -37,7 +37,7 @@ def main():
     args = parse_args()
     
     exp_name = f"samsum-{args.model_name.replace('/', '-')}"
-    output_dir = args.output_dir
+    output_dir = f"results/{exp_name}"
     os.makedirs(f"results/{exp_name}", exist_ok=True)
 
     # ------------------------------
@@ -123,6 +123,8 @@ def main():
         logging_steps=args.logging_steps,
         save_steps=args.save_steps,
         predict_with_generate=True,  # 평가 시 텍스트 생성 활성화
+        generation_max_length=128,    # 예시: 최대 길이 128로 지정
+        generation_num_beams=5,       # 예시: 빔 서치 사용
         report_to=["wandb"],
         run_name=args.run_name,
         seed=args.seed,
@@ -151,7 +153,7 @@ def main():
        # ------------------------------
     # 9. 테스트셋 평가 및 결과 로깅 (pred와 gold 저장 추가)
     # ------------------------------
-    test_results = trainer.predict(tokenized_dataset["test"])
+    test_results = trainer.predict(tokenized_dataset["test"], gen_kwargs={"max_length":128, "num_beams":5})
     predictions = test_results.predictions
     labels = test_results.label_ids
 
