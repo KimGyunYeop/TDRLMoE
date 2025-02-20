@@ -11,6 +11,7 @@ from transformers import (
     Seq2SeqTrainingArguments,
     Seq2SeqTrainer,
 )
+import os
 
 
 def parse_args():
@@ -36,6 +37,8 @@ def main():
     args = parse_args()
     
     exp_name = f"samsum-{args.model_name.replace('/', '-')}"
+    output_dir = args.output_dir
+    os.makedirs(f"results/{exp_name}", exist_ok=True)
 
     # ------------------------------
     # 1. wandb 초기화 (프로젝트 및 엔터티 설정)
@@ -46,6 +49,7 @@ def main():
     # 2. SAMSum 데이터셋 로드
     # ------------------------------
     dataset = load_dataset(args.dataset_name)
+    print(dataset)
 
     # ------------------------------
     # 3. Switch Transformer 모델 및 토크나이저 로드
@@ -73,13 +77,16 @@ def main():
     data_collator = DataCollatorForSeq2Seq(tokenizer=tokenizer, model=model)
 
     # ------------------------------
-    # 6. 평가 Metric: ROUGE 설정
+    # 6. 평가 Metric: ROUGE 설정 및 eval step마다 pred, gold 저장 (compute_metrics 수정)
     # ------------------------------
     rouge_metric = evaluate.load("rouge")
+    eval_samples_dir = os.path.join(output_dir, "eval_samples")
+    os.makedirs(eval_samples_dir, exist_ok=True)
+    eval_step_counter = 0
 
     def compute_metrics(eval_preds):
+        nonlocal eval_step_counter
         preds, labels = eval_preds
-        # 만약 튜플로 전달되는 경우 첫 번째 원소 선택
         if isinstance(preds, tuple):
             preds = preds[0]
         # -100 값을 pad_token_id로 대체하여 디코딩 에러 방지
@@ -89,6 +96,16 @@ def main():
         decoded_labels = tokenizer.batch_decode(labels, skip_special_tokens=True)
         result = rouge_metric.compute(predictions=decoded_preds, references=decoded_labels, use_stemmer=True)
         result = {key: round(value * 100, 4) for key, value in result.items()}
+
+        # eval 단계마다 예측 및 정답 샘플 저장
+        sample_list = []
+        for pred, gold in zip(decoded_preds, decoded_labels):
+            sample_list.append({"prediction": pred, "gold": gold})
+        sample_file = os.path.join(eval_samples_dir, f"pred_gold_samples_eval_{eval_step_counter}.json")
+        with open(sample_file, "w", encoding="utf-8") as f:
+            json.dump(sample_list, f, indent=4, ensure_ascii=False)
+        eval_step_counter += 1
+
         return result
 
     # ------------------------------
@@ -131,8 +148,8 @@ def main():
     # ------------------------------
     trainer.train()
 
-    # ------------------------------
-    # 9. 테스트셋 평가 및 결과 로깅
+       # ------------------------------
+    # 9. 테스트셋 평가 및 결과 로깅 (pred와 gold 저장 추가)
     # ------------------------------
     test_results = trainer.predict(tokenized_dataset["test"])
     predictions = test_results.predictions
@@ -145,6 +162,14 @@ def main():
 
     print("Test ROUGE scores:", {k: round(v, 2) for k, v in final_rouge_scores.items()})
     wandb.log({f"test_{k}": v for k, v in final_rouge_scores.items()})
+
+    # pred와 gold 텍스트 샘플 저장 (생성된 텍스트 비교를 위한 저장)
+    sample_list = []
+    for pred, gold in zip(pred_str, label_str):
+        sample_list.append({"prediction": pred, "gold": gold})
+    
+    with open(f"results/{exp_name}/pred_gold_samples.json", "w", encoding="utf-8") as f:
+        json.dump(sample_list, f, indent=4, ensure_ascii=False)
 
     # ------------------------------
     # 10. 모델 및 결과 저장
