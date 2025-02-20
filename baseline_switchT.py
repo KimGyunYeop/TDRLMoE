@@ -16,7 +16,7 @@ from transformers import (
 def parse_args():
     parser = argparse.ArgumentParser(description="Train Switch Transformer on SAMSum with Seq2SeqTrainer")
     # 모델 및 데이터 관련 인자
-    parser.add_argument("--model_name", type=str, default="google/switch-base-16", help="HuggingFace model identifier")
+    parser.add_argument("--model_name", type=str, default="google/switch-base-8", help="HuggingFace model identifier")
     parser.add_argument("--dataset_name", type=str, default="samsum", help="Dataset name to load")
     # 학습 하이퍼파라미터
     parser.add_argument("--num_train_epochs", type=int, default=10, help="Number of training epochs")
@@ -34,11 +34,13 @@ def parse_args():
 
 def main():
     args = parse_args()
+    
+    exp_name = f"samsum-{args.model_name.replace('/', '-')}"
 
     # ------------------------------
     # 1. wandb 초기화 (프로젝트 및 엔터티 설정)
     # ------------------------------
-    wandb.init(project=f"samsum-{args.model_name.replace('/', '-')}", name=args.run_name)
+    wandb.init(project=exp_name, name=args.run_name)
 
     # ------------------------------
     # 2. SAMSum 데이터셋 로드
@@ -110,6 +112,7 @@ def main():
         adam_beta2=0.999,
         adam_epsilon=1e-08,
         fp16=True,
+        save_total_limit=3  # 최근 3개 체크포인트만 유지
     )
 
     trainer = Seq2SeqTrainer(
@@ -145,8 +148,8 @@ def main():
     # ------------------------------
     # 10. 모델 및 결과 저장
     # ------------------------------
-    trainer.save_model(".results/switch-samsum-model")
-    with open("results/switch-samsum-model/samsum_switch_results.json", "w") as f:
+    trainer.save_model(f"results/{exp_name}")
+    with open(f"results/{exp_name}/samsum_switch_results.json", "w") as f:
         json.dump({k: round(v, 4) for k, v in final_rouge_scores.items()}, f, indent=4)
     print("Model and results saved.")
 
