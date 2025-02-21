@@ -10,7 +10,7 @@ from transformers import (
     Seq2SeqTrainingArguments,
     Seq2SeqTrainer,
 )
-from base_Switch_Transformer import SwitchTransformersForConditionalGeneration
+from Custom_MoE2 import SwitchTransformersForConditionalGeneration, SwitchTransformersConfig
 import os
 import torch
 
@@ -32,7 +32,15 @@ def parse_args():
     parser.add_argument("--fp16", action="store_true", default=True, help="Use mixed precision training")
     # 기타 옵셔널 인자
     parser.add_argument("--seed", type=int, default=42, help="Random seed for reproducibility")
-    parser.add_argument("--run_name", type=str, default="baseline", help="Wandb run name")
+    parser.add_argument("--run_name", type=str, default="run", help="Wandb run name")
+    
+    #RL인자
+    parser.add_argument("--do_RL", action="store_true", default=True, help="Use Reinforcement Learning")
+    parser.add_argument("--RL_expert_change_ratio", type=float, default=0.1, help="Expert change ratio")
+    parser.add_argument("--RL_sample_num", type=int, default=4, help="Number of samples for RL")
+    parser.add_argument("--RL_loss_coef", type=float, default=1.0, help="RL loss coefficient")
+    parser.add_argument("--RL_sample_stretege", type=str, default="multinoimal", help="RL sample strategy")
+    
     return parser.parse_args()
 
 
@@ -42,6 +50,14 @@ def main():
     exp_name = f"samsum-{args.model_name.replace('/', '-')}"
     output_dir = f"results/{exp_name}"
     os.makedirs(f"results/{exp_name}", exist_ok=True)
+    
+    if args.do_RL:
+        args.run_name += "_RL"
+        if args.RL_sample_stretege == "multinoimal":
+            args.run_name += "_multi"
+        elif args.RL_sample_stretege == "argmax":
+            args.run_name += "_argmax"
+        args.run_name += f"_exp{args.RL_expert_change_ratio}_num{args.RL_sample_num}_coef{args.RL_loss_coef}"
 
     # ------------------------------
     # 1. wandb 초기화 (프로젝트 및 엔터티 설정)
@@ -58,7 +74,18 @@ def main():
     # 3. Switch Transformer 모델 및 토크나이저 로드
     # ------------------------------
     tokenizer = AutoTokenizer.from_pretrained(args.model_name)
-    model = SwitchTransformersForConditionalGeneration.from_pretrained(args.model_name, device_map="auto")
+    model_config = SwitchTransformersConfig.from_pretrained(args.model_name)
+    model_config.do_RL = args.do_RL
+    model_config.RL_expert_change_ratio = args.RL_expert_change_ratio
+    model_config.RL_sample_num = args.RL_sample_num
+    model_config.RL_loss_coef = args.RL_loss_coef
+    model_config.RL_sample_stretege = args.RL_sample_stretege
+    print(model_config)
+    model = SwitchTransformersForConditionalGeneration.from_pretrained(
+        pretrained_model_name_or_path=args.model_name,
+        config=model_config,
+        device_map="auto"
+    )
     # model = SwitchTransformersForConditionalGeneration.from_pretrained(args.model_name)
     # if args.fp16:
     #     model.half()
@@ -121,7 +148,7 @@ def main():
     training_args = Seq2SeqTrainingArguments(
         output_dir=args.output_dir,
         evaluation_strategy="steps",
-        eval_steps=1000,
+        eval_steps=100,
         learning_rate=args.learning_rate,
         per_device_train_batch_size=args.per_device_train_batch_size,
         per_device_eval_batch_size=args.per_device_eval_batch_size,

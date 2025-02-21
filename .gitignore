@@ -7,3 +7,7 @@ wandb-history/*
 wandb-summary/*
 wandb-summary.json
 *.yml
+*.out
+*.sh
+*.log
+*.out
