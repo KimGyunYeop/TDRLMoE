@@ -1947,7 +1947,7 @@ class SwitchTransformersForConditionalGeneration(SwitchTransformersPreTrainedMod
         if output_router_logits:
             # Compute the router loss (z_loss + auxiliary loss) for each router in the encoder and decoder
             if self.encoder.config.encoder_sparse_step > 1:
-                encoder_router_logits, encoder_expert_indexes = self._unpack_router_logits(encoder_outputs[-1])
+                encoder_router_logits, encoder_expert_indexes = self._unpack_router_logits(encoder_outputs[-1], device=lm_logits.device)
                 encoder_z_loss = router_z_loss_func(encoder_router_logits)
                 encoder_router_probs = nn.Softmax(dim=-1)(encoder_router_logits)
                 encoder_aux_loss = load_balancing_loss_func(encoder_router_probs, encoder_expert_indexes)
@@ -1956,7 +1956,7 @@ class SwitchTransformersForConditionalGeneration(SwitchTransformersPreTrainedMod
                 encoder_aux_loss = 0
 
             if self.decoder.config.decoder_sparse_step > 1:
-                decoder_router_logits, decoder_expert_indexes = self._unpack_router_logits(decoder_outputs[-1])
+                decoder_router_logits, decoder_expert_indexes = self._unpack_router_logits(decoder_outputs[-1], device=lm_logits.device)
                 decoder_z_loss = router_z_loss_func(decoder_router_logits)
                 decoder_router_probs = nn.Softmax(dim=-1)(decoder_router_logits)
                 decoder_aux_loss = load_balancing_loss_func(decoder_router_probs, decoder_expert_indexes)
@@ -2001,15 +2001,28 @@ class SwitchTransformersForConditionalGeneration(SwitchTransformersPreTrainedMod
             encoder_router_logits=encoder_outputs.router_probs,
         )
 
-    def _unpack_router_logits(self, router_outputs):
+    def _unpack_router_logits(self, router_outputs, device=None):
         total_router_logits = []
         total_expert_indexes = []
+        if device is None:
+            device = router_outputs[-1][0].device
         for router_output in router_outputs:
             if len(router_output[0].shape) > 1:
                 router_logits, expert_indexes = router_output
-                total_router_logits.append(router_logits)
-                total_expert_indexes.append(expert_indexes)
+                total_router_logits.append(router_logits.to(device))
+                total_expert_indexes.append(expert_indexes.to(device))
         return torch.cat(total_router_logits, dim=1), torch.cat(total_expert_indexes, dim=1)
+    
+    # original
+    # def _unpack_router_logits(self, router_outputs):
+    #     total_router_logits = []
+    #     total_expert_indexes = []
+    #     for router_output in router_outputs:
+    #         if len(router_output[0].shape) > 1:
+    #             router_logits, expert_indexes = router_output
+    #             total_router_logits.append(router_logits)
+    #             total_expert_indexes.append(expert_indexes)
+    #     return torch.cat(total_router_logits, dim=1), torch.cat(total_expert_indexes, dim=1)
 
     def prepare_decoder_input_ids_from_labels(self, labels: torch.Tensor):
         return self._shift_right(labels)

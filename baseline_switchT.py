@@ -18,7 +18,7 @@ import torch
 def parse_args():
     parser = argparse.ArgumentParser(description="Train Switch Transformer on SAMSum with Seq2SeqTrainer")
     # 모델 및 데이터 관련 인자
-    parser.add_argument("--model_name", type=str, default="google/switch-base-16", help="HuggingFace model identifier")
+    parser.add_argument("--model_name", type=str, default="google/switch-base-64", help="HuggingFace model identifier")
     parser.add_argument("--dataset_name", type=str, default="samsum", help="Dataset name to load")
     # 학습 하이퍼파라미터
     parser.add_argument("--num_train_epochs", type=int, default=10, help="Number of training epochs")
@@ -29,6 +29,7 @@ def parse_args():
     parser.add_argument("--save_steps", type=int, default=500, help="Save checkpoint every X updates steps")
     parser.add_argument("--logging_steps", type=int, default=100, help="Log every X updates steps")
     parser.add_argument("--output_dir", type=str, default="./results/switch_samsum_checkpoints", help="Output directory for checkpoints")
+    parser.add_argument("--fp16", action="store_true", default=True, help="Use mixed precision training")
     # 기타 옵셔널 인자
     parser.add_argument("--seed", type=int, default=42, help="Random seed for reproducibility")
     parser.add_argument("--run_name", type=str, default="switch-samsum-base16-run", help="Wandb run name")
@@ -57,7 +58,10 @@ def main():
     # 3. Switch Transformer 모델 및 토크나이저 로드
     # ------------------------------
     tokenizer = AutoTokenizer.from_pretrained(args.model_name)
-    model = SwitchTransformersForConditionalGeneration.from_pretrained(args.model_name)
+    model = SwitchTransformersForConditionalGeneration.from_pretrained(args.model_name, device_map="auto")
+    # model = SwitchTransformersForConditionalGeneration.from_pretrained(args.model_name)
+    # if args.fp16:
+    #     model.half()
     
     # ------------------------------
     # 4. 데이터 전처리: 동적 패딩을 위해 max_length 없이 토크나이즈 (단, truncation은 True로 설정)
@@ -132,7 +136,7 @@ def main():
         adam_beta1=0.9,
         adam_beta2=0.999,
         adam_epsilon=1e-08,
-        fp16=True,
+        fp16=False,
         save_total_limit=3,  # 최근 3개 체크포인트만 유지
     )
 
