@@ -1826,7 +1826,6 @@ def generate_change_map(seq_length, num_blocks, change_ratio=0.1):
 
 
 from transformers.utils import ModelOutput
-@dataclass
 class CustomMoEOutput(ModelOutput):
     """
     Base class for sequence-to-sequence language models outputs.

@@ -28,7 +28,7 @@ def parse_args():
     parser.add_argument("--per_device_eval_batch_size", type=int, default=8, help="Batch size per device during evaluation")
     parser.add_argument("--save_steps", type=int, default=500, help="Save checkpoint every X updates steps")
     parser.add_argument("--logging_steps", type=int, default=100, help="Log every X updates steps")
-    parser.add_argument("--output_dir", type=str, default="./results/switch_samsum_checkpoints", help="Output directory for checkpoints")
+    # parser.add_argument("--output_dir", type=str, default="./results/switch_samsum_checkpoints", help="Output directory for checkpoints")
     parser.add_argument("--fp16", action="store_true", default=True, help="Use mixed precision training")
     # 기타 옵셔널 인자
     parser.add_argument("--seed", type=int, default=42, help="Random seed for reproducibility")
@@ -48,8 +48,8 @@ def main():
     args = parse_args()
     
     exp_name = f"samsum-{args.model_name.replace('/', '-')}"
-    output_dir = f"results/{exp_name}"
-    os.makedirs(f"results/{exp_name}", exist_ok=True)
+    output_dir = f"results/{exp_name}/{args.run_name}"
+    os.makedirs(f"results/{exp_name}/{args.run_name}", exist_ok=True)
     
     if args.do_RL:
         args.run_name += "_RL"
@@ -146,7 +146,7 @@ def main():
     # 7. Training Arguments 및 Trainer 설정
     # ------------------------------
     training_args = Seq2SeqTrainingArguments(
-        output_dir=args.output_dir,
+        output_dir=output_dir,
         evaluation_strategy="steps",
         eval_steps=100,
         learning_rate=args.learning_rate,
@@ -202,14 +202,14 @@ def main():
     for pred, gold in zip(pred_str, label_str):
         sample_list.append({"prediction": pred, "gold": gold})
     
-    with open(f"results/{exp_name}/pred_gold_samples.json", "w", encoding="utf-8") as f:
+    with open(f"results/{exp_name}/{args.run_name}/pred_gold_samples.json", "w", encoding="utf-8") as f:
         json.dump(sample_list, f, indent=4, ensure_ascii=False)
 
     # ------------------------------
     # 10. 모델 및 결과 저장
     # ------------------------------
-    trainer.save_model(f"results/{exp_name}")
-    with open(f"results/{exp_name}/samsum_switch_results.json", "w") as f:
+    trainer.save_model(f"results/{exp_name}/{args.run_name}")
+    with open(f"results/{exp_name}/{args.run_name}/samsum_switch_results.json", "w") as f:
         json.dump({k: round(v, 4) for k, v in final_rouge_scores.items()}, f, indent=4)
     print("Model and results saved.")
 
