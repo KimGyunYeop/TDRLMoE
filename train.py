@@ -77,8 +77,6 @@ def main():
     args = parse_args()
     
     exp_name = f"samsum-{args.model_name.replace('/', '-')}"
-    output_dir = f"results/{exp_name}/{args.run_name}"
-    os.makedirs(f"results/{exp_name}/{args.run_name}", exist_ok=True)
     
     if args.do_RL:
         # RL 사용 중임을 표시
@@ -111,6 +109,9 @@ def main():
         args.run_name += "_" + "_".join(run_name_parts)
 
 
+    output_dir = f"results/{exp_name}/{args.run_name}"
+    os.makedirs(f"results/{exp_name}/{args.run_name}", exist_ok=True)
+    
     # ------------------------------
     # 1. wandb 초기화 (프로젝트 및 엔터티 설정)
     # ------------------------------
@@ -241,6 +242,7 @@ def main():
     test_results = trainer.predict(
         tokenized_dataset["test"]
     )
+    trainer.save_model(f"results/{exp_name}/{args.run_name}")
 
     # 이미 ID 형태 (shape: [batch_size, max_new_tokens])
     predictions = np.where(predictions < 0, tokenizer.pad_token_id, predictions)
@@ -254,25 +256,23 @@ def main():
 
     final_rouge = rouge_metric.compute(predictions=pred_str, references=label_str)
     final_rouge_scores = {key: value * 100 for key, value in final_rouge.items()}  # .mid.fmeasure 제거
-
+    
     print("Test ROUGE scores:", {k: round(v, 2) for k, v in final_rouge_scores.items()})
     wandb.log({f"test_{k}": v for k, v in final_rouge_scores.items()})
+    
+    with open(f"results/{exp_name}/{args.run_name}/samsum_switch_results.json", "w") as f:
+        json.dump({k: round(v, 4) for k, v in final_rouge_scores.items()}, f, indent=4)
+    print("Model and results saved.")
+
+
 
     # pred와 gold 텍스트 샘플 저장 (생성된 텍스트 비교를 위한 저장)
     sample_list = []
     for pred, gold in zip(pred_str, label_str):
         sample_list.append({"prediction": pred, "gold": gold})
     
-    trainer.save_model(f"results/{exp_name}/{args.run_name}")
     with open(f"results/{exp_name}/{args.run_name}/pred_gold_samples.json", "w", encoding="utf-8") as f:
         json.dump(sample_list, f, indent=4, ensure_ascii=False)
-
-    # ------------------------------
-    # 10. 모델 및 결과 저장
-    # ------------------------------
-    with open(f"results/{exp_name}/{args.run_name}/samsum_switch_results.json", "w") as f:
-        json.dump({k: round(v, 4) for k, v in final_rouge_scores.items()}, f, indent=4)
-    print("Model and results saved.")
 
 
 if __name__ == "__main__":
