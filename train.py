@@ -14,6 +14,32 @@ from Custom_MoE2 import SwitchTransformersForConditionalGeneration, SwitchTransf
 import os
 import torch
 
+# ------------------------------
+# 1. 커스텀 Trainer 클래스 정의 (추가 loss 로깅)
+# ------------------------------
+class CustomSeq2SeqTrainer(Seq2SeqTrainer):
+    def compute_loss(self, model, inputs, return_outputs=False, **kwargs):
+        outputs = model(**inputs)
+        # 기본 loss 추출
+        loss = outputs.loss if hasattr(outputs, "loss") else outputs[0]
+        
+        # 추가 loss들 추출
+        extra_loss_names = [
+            "encoder_z_loss", "encoder_aux_loss",
+            "decoder_z_loss", "decoder_aux_loss",
+            "decoder_rl_loss", "sample_lm_loss", "loss"
+        ]
+        extra_losses = {}
+        for name in extra_loss_names:
+            loss_value = getattr(outputs, name, None)
+            if loss_value is not None:
+                extra_losses[name] = loss_value.item()
+        
+        # wandb에 추가 loss 로그 기록
+        wandb.log(extra_losses)
+        
+        return (loss, outputs) if return_outputs else loss
+
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Train Switch Transformer on SAMSum with Seq2SeqTrainer")
@@ -29,7 +55,7 @@ def parse_args():
     parser.add_argument("--save_steps", type=int, default=500, help="Save checkpoint every X updates steps")
     parser.add_argument("--logging_steps", type=int, default=100, help="Log every X updates steps")
     # parser.add_argument("--output_dir", type=str, default="./results/switch_samsum_checkpoints", help="Output directory for checkpoints")
-    parser.add_argument("--fp16", action="store_true", default=True, help="Use mixed precision training")
+    parser.add_argument("--fp16", action="store_true", default=False, help="Use mixed precision training")
     # 기타 옵셔널 인자
     parser.add_argument("--seed", type=int, default=42, help="Random seed for reproducibility")
     parser.add_argument("--run_name", type=str, default="run", help="Wandb run name")
@@ -39,7 +65,10 @@ def parse_args():
     parser.add_argument("--RL_expert_change_ratio", type=float, default=0.1, help="Expert change ratio")
     parser.add_argument("--RL_sample_num", type=int, default=4, help="Number of samples for RL")
     parser.add_argument("--RL_loss_coef", type=float, default=1.0, help="RL loss coefficient")
-    parser.add_argument("--RL_sample_stretege", type=str, default="multinoimal", help="RL sample strategy")
+    parser.add_argument("--RL_sample_stretege", type=str, default="multinoimal", help="RL sample strategy", choices=["multinoimal", "random"])
+    parser.add_argument("--RL_base_logit_type", type=str, default="top1", help="RL base logit type", choices=["top1", "mean"])
+    parser.add_argument("--RL_reward_stretegy", type=str, default="minus", help="RL base logit type", choices=["minus", "static"])
+    parser.add_argument("--use_sample_lm_loss", action="store_true", default=False, help="Use Reinforcement Learning")
     
     return parser.parse_args()
 
@@ -52,12 +81,35 @@ def main():
     os.makedirs(f"results/{exp_name}/{args.run_name}", exist_ok=True)
     
     if args.do_RL:
-        args.run_name += "_RL"
-        if args.RL_sample_stretege == "multinoimal":
-            args.run_name += "_multi"
-        elif args.RL_sample_stretege == "argmax":
-            args.run_name += "_argmax"
-        args.run_name += f"_exp{args.RL_expert_change_ratio}_num{args.RL_sample_num}_coef{args.RL_loss_coef}"
+        # RL 사용 중임을 표시
+        run_name_parts = ["RL"]
+
+        # RL 샘플링 전략
+        run_name_parts.append(args.RL_sample_stretege)  # e.g. "multinoimal" or "random"
+        
+        # Expert 교체 비율
+        run_name_parts.append(f"exp{args.RL_expert_change_ratio}")
+        
+        # 샘플 개수
+        run_name_parts.append(f"num{args.RL_sample_num}")
+        
+        # RL loss coef
+        run_name_parts.append(f"coef{args.RL_loss_coef}")
+        
+        # Base logit type
+        run_name_parts.append(args.RL_base_logit_type)  # e.g. "top1" or "mean"
+        
+        # reward 전략
+        run_name_parts.append(args.RL_reward_stretegy)  # e.g. "minus" or "static"
+        
+        # sample_lm_loss
+        if args.use_sample_lm_loss:
+            run_name_parts.append("samplm")
+        
+        # run_name 뒤에 조합된 정보 이어붙이기
+        # 예: 기존 args.run_name="myrun" -> "myrun_RL_multinoimal_exp0.1_num4_coef1.0_top1_minus_samplm"
+        args.run_name += "_" + "_".join(run_name_parts)
+
 
     # ------------------------------
     # 1. wandb 초기화 (프로젝트 및 엔터티 설정)
@@ -148,11 +200,11 @@ def main():
     training_args = Seq2SeqTrainingArguments(
         output_dir=output_dir,
         evaluation_strategy="steps",
-        eval_steps=100,
+        eval_steps=1000,
         learning_rate=args.learning_rate,
         per_device_train_batch_size=args.per_device_train_batch_size,
         per_device_eval_batch_size=args.per_device_eval_batch_size,
-        num_train_epochs=args.num_train_epochs,
+        num_train_epochs=10,
         weight_decay=0.01,
         logging_steps=args.logging_steps,
         save_steps=args.save_steps,
@@ -163,7 +215,7 @@ def main():
         adam_beta1=0.9,
         adam_beta2=0.999,
         adam_epsilon=1e-08,
-        fp16=False,
+        fp16=args.fp16,
         save_total_limit=3,  # 최근 3개 체크포인트만 유지
     )
 
@@ -182,15 +234,24 @@ def main():
     # ------------------------------
     trainer.train()
 
+    trainer.save_model(f"results/{exp_name}/{args.run_name}")
        # ------------------------------
     # 9. 테스트셋 평가 및 결과 로깅 (pred와 gold 저장 추가)
-    # ------------------------------
-    test_results = trainer.predict(tokenized_dataset["test"])
-    predictions = test_results.predictions
+    # ------------------------------# trainer: Seq2SeqTrainer
+    test_results = trainer.predict(
+        tokenized_dataset["test"]
+    )
+
+    # 이미 ID 형태 (shape: [batch_size, max_new_tokens])
+    predictions = np.where(predictions < 0, tokenizer.pad_token_id, predictions)
     labels = test_results.label_ids
 
     pred_str = tokenizer.batch_decode(predictions, skip_special_tokens=True)
-    label_str = tokenizer.batch_decode(np.where(labels != -100, labels, tokenizer.pad_token_id), skip_special_tokens=True)
+
+    # label -100 → pad_token_id 대체
+    labels = np.where(labels != -100, labels, tokenizer.pad_token_id)
+    label_str = tokenizer.batch_decode(labels, skip_special_tokens=True)
+
     final_rouge = rouge_metric.compute(predictions=pred_str, references=label_str)
     final_rouge_scores = {key: value * 100 for key, value in final_rouge.items()}  # .mid.fmeasure 제거
 
@@ -202,13 +263,13 @@ def main():
     for pred, gold in zip(pred_str, label_str):
         sample_list.append({"prediction": pred, "gold": gold})
     
+    trainer.save_model(f"results/{exp_name}/{args.run_name}")
     with open(f"results/{exp_name}/{args.run_name}/pred_gold_samples.json", "w", encoding="utf-8") as f:
         json.dump(sample_list, f, indent=4, ensure_ascii=False)
 
     # ------------------------------
     # 10. 모델 및 결과 저장
     # ------------------------------
-    trainer.save_model(f"results/{exp_name}/{args.run_name}")
     with open(f"results/{exp_name}/{args.run_name}/samsum_switch_results.json", "w") as f:
         json.dump({k: round(v, 4) for k, v in final_rouge_scores.items()}, f, indent=4)
     print("Model and results saved.")

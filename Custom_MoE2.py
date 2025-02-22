@@ -22,6 +22,7 @@ from typing import Optional, Tuple, Union
 import torch
 import torch.nn as nn
 from torch.nn import CrossEntropyLoss
+from dataclasses import dataclass
 
 from transformers.activations import ACT2FN
 from transformers.cache_utils import Cache, DynamicCache, EncoderDecoderCache, StaticCache
@@ -31,7 +32,7 @@ from transformers.modeling_outputs import (
     MoEModelOutput,
     MoEModelOutputWithPastAndCrossAttentions,
     Seq2SeqMoEModelOutput,
-    Seq2SeqMoEOutput,
+    # Seq2SeqMoEOutput,
 )
 from transformers.modeling_utils import PreTrainedModel
 from transformers.pytorch_utils import ALL_LAYERNORM_LAYERS, find_pruneable_heads_and_indices, prune_linear_layer
@@ -156,6 +157,9 @@ class SwitchTransformersConfig(PretrainedConfig):
         RL_sample_num = 4,
         RL_loss_coef = 1.0,
         RL_sample_stretege = "multinoimal",
+        RL_base_logit_type = "top1",
+        RL_reward_stretegy = "minus",
+        use_sample_lm_loss = False,
         **kwargs,
     ):
         self.RL_expert_change_ratio = RL_expert_change_ratio
@@ -163,6 +167,9 @@ class SwitchTransformersConfig(PretrainedConfig):
         self.RL_sample_num = RL_sample_num
         self.RL_loss_coef = RL_loss_coef
         self.RL_sample_stretege = RL_sample_stretege
+        self.RL_base_logit_type = RL_base_logit_type
+        self.use_sample_lm_loss = use_sample_lm_loss
+        self.RL_reward_stretegy=RL_reward_stretegy
         
         self.vocab_size = vocab_size
         self.d_model = d_model
@@ -378,7 +385,7 @@ class SwitchTransformersTop1Router(nn.Module):
             if self.RL_sample_stretege == "multinoimal":
                 mapping_expert_index = torch.multinomial(router_probs.view(-1, self.num_experts), 1).view(expert_index.shape)
             elif self.RL_sample_stretege == "random":
-                mapping_expert_index = torch.randint(0, self.num_experts, expert_index.shape)
+                mapping_expert_index = torch.randint(0, self.num_experts, expert_index.shape, device=expert_index.device)
             
             expert_index[:, current_change_map] = mapping_expert_index[:, current_change_map]
             
@@ -1826,7 +1833,8 @@ def generate_change_map(seq_length, num_blocks, change_ratio=0.1):
 
 
 from transformers.utils import ModelOutput
-class CustomMoEOutput(ModelOutput):
+@dataclass
+class Seq2SeqMoEOutput(ModelOutput):
     """
     Base class for sequence-to-sequence language models outputs.
 
@@ -1885,11 +1893,13 @@ class CustomMoEOutput(ModelOutput):
 
     loss: Optional[torch.FloatTensor] = None
     logits: torch.FloatTensor = None
+    lm_loss: torch.FloatTensor = None
     encoder_z_loss: torch.FloatTensor = None
     decoder_z_loss: torch.FloatTensor = None
     encoder_aux_loss: torch.FloatTensor = None
     decoder_aux_loss: torch.FloatTensor = None
     decoder_rl_loss: torch.FloatTensor = None
+    sample_lm_loss: torch.FloatTensor = None
     past_key_values: Optional[Tuple[Tuple[torch.FloatTensor]]] = None
     decoder_hidden_states: Optional[Tuple[torch.FloatTensor, ...]] = None
     decoder_attentions: Optional[Tuple[torch.FloatTensor, ...]] = None
@@ -1933,6 +1943,9 @@ class SwitchTransformersForConditionalGeneration(SwitchTransformersPreTrainedMod
         self.do_RL = config.do_RL
         self.RL_sample_num = config.RL_sample_num
         self.RL_loss_coef = config.RL_loss_coef
+        self.RL_base_logit_type = config.RL_base_logit_type
+        self.use_sample_lm_loss = config.use_sample_lm_loss
+        self.RL_reward_stretegy = config.RL_reward_stretegy
 
         # Initialize weights and apply final processing
         self.post_init()
@@ -2086,6 +2099,13 @@ class SwitchTransformersForConditionalGeneration(SwitchTransformersPreTrainedMod
         
         # RL
         if self.do_RL and self.training:
+            if self.RL_base_logit_type == "top1":
+                router_probs_list = []
+                branch_logits_list = [] 
+            else:
+                router_probs_list = [sequence_output.router_probs]
+                branch_logits_list = [lm_logits]
+                
             seq_length = input_ids.shape[1] if input_ids is not None else 128
             num_blocks = self.encoder.config.num_layers
             encoder_change_map = generate_change_map(seq_length, num_blocks, self.RL_expert_change_ratio)
@@ -2095,10 +2115,9 @@ class SwitchTransformersForConditionalGeneration(SwitchTransformersPreTrainedMod
             num_blocks = self.decoder.config.num_layers
             decoder_change_map = generate_change_map(seq_length, num_blocks, self.RL_expert_change_ratio)
             
-            with torch.no_grad():
-                baseline_probs = self._compute_label_probs(lm_logits, labels)  # token별 p(correct)
+            # with torch.no_grad():
+            #     baseline_probs = self._compute_label_probs(lm_logits, labels)  # token별 p(correct)
 
-            rl_losses = []
             for i in range(self.RL_sample_num - 1):
                 #encode
                 branch_encoder_outputs = self.encoder(
@@ -2133,40 +2152,44 @@ class SwitchTransformersForConditionalGeneration(SwitchTransformersPreTrainedMod
                     change_map=decoder_change_map,
                 )
                 branch_seq_out = branch_decoder_outputs[0]
+                router_probs_list.append(branch_decoder_outputs.router_probs)
+                
                 
                 if self.config.tie_word_embeddings:
                     branch_seq_out = branch_seq_out * (self.model_dim**-0.5)
 
                 branch_logits = self.lm_head(branch_seq_out)  # (b, seq, vocab)
-                # branch_logits_list.append(branch_logits)
+                branch_logits_list.append(branch_logits)
+
+            rl_losses = []
+            if self.RL_base_logit_type == "top1":
+                baseline_probs = self._compute_label_probs(lm_logits, labels)  # token별 p(correct)
+            elif self.RL_base_logit_type == "mean":
+                baseline_probs = torch.cat(branch_logits_list, dim=-1).mean(dim=-1)
                 
-                p_branch = self._compute_label_probs(branch_logits, labels)
+            for bl, brp in zip(branch_logits_list, router_probs_list):
+                p_branch = self._compute_label_probs(bl, labels)
                 
                 # (2) reward => (b, seq)
                 reward = p_branch - baseline_probs
                 
-                for k in range(len(branch_decoder_outputs.router_probs)):
-                    if len(branch_decoder_outputs.router_probs[k][0]) <= 1:
+                if self.RL_reward_stretegy == "static":
+                    reward = reward.sign()
+                elif self.RL_reward_stretegy == "minus":
+                    reward = reward.clamp(-1, 1)
+                
+                for k in range(len(brp)):
+                    if len(brp[k][0]) <= 1:
                         continue
-                    # print("k: ", k)
-                    # print("branch_decoder_outputs.router_probs[0]: ", branch_decoder_outputs.router_probs[k][0])
-                    # print("branch_decoder_outputs.router_probs[0].shape: ", branch_decoder_outputs.router_probs[k][0].shape)
-                    # print("branch_decoder_outputs.router_probs[1]: ", branch_decoder_outputs.router_probs[k][1])
-                    # print("branch_decoder_outputs.router_probs[1].shape: ", branch_decoder_outputs.router_probs[k][1].shape)
-                    router_prob = torch.nn.functional.softmax(branch_decoder_outputs.router_probs[k][0], dim=-1)
+                    router_prob = torch.nn.functional.softmax(brp[k][0], dim=-1)
                     chosen_prob = torch.gather(
                         router_prob, 
                         1, 
-                        branch_decoder_outputs.router_probs[k][1].unsqueeze(-1)
+                        brp[k][1].unsqueeze(-1)
                     ).squeeze(-1)  # -> shape(b, seq)
-                    # print(f"chosen_prob: {chosen_prob}")
+                    
                     logp = torch.log(chosen_prob + 1e-12).to(baseline_probs.device)  # -> shape(b, seq)
                 
-                    # (4) RL Loss => -(reward * logp).mean()
-                    #     => can do mask if labels=-100, etc.
-                    # print(f"logp: {logp.shape}")
-                    # print(f"reward: {reward}")
-                    # print(f"logp: {logp}")  
                     rl_loss_i = -(reward * logp).mean()
                     rl_losses.append(rl_loss_i)
                     
@@ -2179,6 +2202,8 @@ class SwitchTransformersForConditionalGeneration(SwitchTransformersPreTrainedMod
         decoder_z_loss = None
         decoder_aux_loss = None
         decoder_rl_loss = None
+        sample_lm_loss = None
+        lm_loss=None
 
         if output_router_logits:
             # Compute the router loss (z_loss + auxiliary loss) for each router in the encoder and decoder
@@ -2204,19 +2229,33 @@ class SwitchTransformersForConditionalGeneration(SwitchTransformersPreTrainedMod
             loss_fct = CrossEntropyLoss(ignore_index=-100)
             # move labels to correct device to enable PP
             labels = labels.to(lm_logits.device)
-            loss = loss_fct(lm_logits.view(-1, lm_logits.size(-1)), labels.view(-1))
+            lm_loss = loss_fct(lm_logits.view(-1, lm_logits.size(-1)), labels.view(-1))
 
             if output_router_logits:
                 z_loss = self.router_z_loss_coef * (encoder_z_loss + decoder_z_loss)
                 aux_loss = self.router_aux_loss_coef * (encoder_aux_loss + decoder_aux_loss)
-                loss = loss + z_loss + aux_loss
+                loss = lm_loss + z_loss + aux_loss
         
         
         if self.do_RL and self.training:
             loss += self.RL_loss_coef * rl_loss
             decoder_rl_loss = rl_loss
-        
-
+            
+            if self.use_sample_lm_loss:
+                if self.RL_base_logit_type == "top1":
+                    branch_logits_list = branch_logits_list[2:]
+                
+                sample_lm_loss_fct = CrossEntropyLoss(ignore_index=-100)
+                sample_lm_loss = None
+                for bl in branch_logits_list:
+                    sll = sample_lm_loss_fct(bl.view(-1, lm_logits.size(-1)), labels.view(-1))
+                    if sample_lm_loss is None:
+                        sample_lm_loss = sll
+                    else:
+                        sample_lm_loss += sll
+                
+                loss += sample_lm_loss
+            
         if not return_dict:
             output = (lm_logits,)
             if output_router_logits:
@@ -2228,11 +2267,13 @@ class SwitchTransformersForConditionalGeneration(SwitchTransformersPreTrainedMod
         return Seq2SeqMoEOutput(
             loss=loss,
             logits=lm_logits,
+            lm_loss=lm_loss,
             encoder_z_loss=encoder_z_loss,
             encoder_aux_loss=encoder_aux_loss,
             decoder_z_loss=decoder_z_loss,
             decoder_aux_loss=decoder_aux_loss,
             decoder_rl_loss=decoder_rl_loss,
+            sample_lm_loss=sample_lm_loss,
             past_key_values=decoder_outputs.past_key_values,
             decoder_hidden_states=decoder_outputs.hidden_states,
             decoder_attentions=decoder_outputs.attentions,
