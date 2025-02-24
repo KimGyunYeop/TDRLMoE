@@ -10,7 +10,7 @@ from transformers import (
     Seq2SeqTrainingArguments,
     Seq2SeqTrainer,
 )
-from Custom_MoE2 import SwitchTransformersForConditionalGeneration, SwitchTransformersConfig
+from Custom_MoE3 import SwitchTransformersForConditionalGeneration, SwitchTransformersConfig
 import os
 import torch
 
