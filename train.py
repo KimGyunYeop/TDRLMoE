@@ -239,32 +239,20 @@ def main():
        # ------------------------------
     # 9. 테스트셋 평가 및 결과 로깅 (pred와 gold 저장 추가)
     # ------------------------------# trainer: Seq2SeqTrainer
-    test_results = trainer.predict(
-        tokenized_dataset["test"]
-    )
-    trainer.save_model(f"results/{exp_name}/{args.run_name}")
-
-    # 이미 ID 형태 (shape: [batch_size, max_new_tokens])
-    predictions = np.where(predictions < 0, tokenizer.pad_token_id, predictions)
+       # ------------------------------
+    # 9. 테스트셋 평가 및 결과 로깅 (pred와 gold 저장 추가)
+    # ------------------------------
+    test_results = trainer.predict(tokenized_dataset["test"])
+    predictions = test_results.predictions
     labels = test_results.label_ids
 
     pred_str = tokenizer.batch_decode(predictions, skip_special_tokens=True)
-
-    # label -100 → pad_token_id 대체
-    labels = np.where(labels != -100, labels, tokenizer.pad_token_id)
-    label_str = tokenizer.batch_decode(labels, skip_special_tokens=True)
-
+    label_str = tokenizer.batch_decode(np.where(labels != -100, labels, tokenizer.pad_token_id), skip_special_tokens=True)
     final_rouge = rouge_metric.compute(predictions=pred_str, references=label_str)
     final_rouge_scores = {key: value * 100 for key, value in final_rouge.items()}  # .mid.fmeasure 제거
-    
+
     print("Test ROUGE scores:", {k: round(v, 2) for k, v in final_rouge_scores.items()})
     wandb.log({f"test_{k}": v for k, v in final_rouge_scores.items()})
-    
-    with open(f"results/{exp_name}/{args.run_name}/samsum_switch_results.json", "w") as f:
-        json.dump({k: round(v, 4) for k, v in final_rouge_scores.items()}, f, indent=4)
-    print("Model and results saved.")
-
-
 
     # pred와 gold 텍스트 샘플 저장 (생성된 텍스트 비교를 위한 저장)
     sample_list = []
@@ -274,6 +262,13 @@ def main():
     with open(f"results/{exp_name}/{args.run_name}/pred_gold_samples.json", "w", encoding="utf-8") as f:
         json.dump(sample_list, f, indent=4, ensure_ascii=False)
 
+    # ------------------------------
+    # 10. 모델 및 결과 저장
+    # ------------------------------
+    trainer.save_model(f"results/{exp_name}/{args.run_name}")
+    with open(f"results/{exp_name}/{args.run_name}/samsum_switch_results.json", "w") as f:
+        json.dump({k: round(v, 4) for k, v in final_rouge_scores.items()}, f, indent=4)
+    print("Model and results saved.")
 
 if __name__ == "__main__":
     main()
