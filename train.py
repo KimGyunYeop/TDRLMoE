@@ -67,8 +67,9 @@ def parse_args():
     parser.add_argument("--RL_loss_coef", type=float, default=1.0, help="RL loss coefficient")
     parser.add_argument("--RL_sample_stretege", type=str, default="multinoimal", help="RL sample strategy", choices=["multinoimal", "random"])
     parser.add_argument("--RL_base_logit_type", type=str, default="top1", help="RL base logit type", choices=["top1", "mean"])
-    parser.add_argument("--RL_reward_stretegy", type=str, default="minus", help="RL base logit type", choices=["minus", "static"])
+    parser.add_argument("--RL_reward_stretegy", type=str, default="minus", help="RL base logit type", choices=["minus", "static", "positive"])
     parser.add_argument("--use_sample_lm_loss", action="store_true", default=False, help="Use Reinforcement Learning")
+    parser.add_argument("--RL_start_epoch", type=int, default=0)
     
     return parser.parse_args()
 
@@ -99,6 +100,9 @@ def main():
         
         # reward 전략
         run_name_parts.append(args.RL_reward_stretegy)  # e.g. "minus" or "static"
+        
+        # start_epoch
+        run_name_parts.append(f"startRL{args.RL_start_epoch}")
         
         # sample_lm_loss
         if args.use_sample_lm_loss:
@@ -133,6 +137,8 @@ def main():
     model_config.RL_sample_num = args.RL_sample_num
     model_config.RL_loss_coef = args.RL_loss_coef
     model_config.RL_sample_stretege = args.RL_sample_stretege
+    
+    
     print(model_config)
     model = SwitchTransformersForConditionalGeneration.from_pretrained(
         pretrained_model_name_or_path=args.model_name,
@@ -143,6 +149,15 @@ def main():
     # if args.fp16:
     #     model.half()
     
+    EPOCH=0
+    if args.do_RL:
+        if EPOCH >= args.RL_start_epoch:
+            model.config.do_RL = True
+            print("RL is activated")
+        else:
+            model.config.do_RL = False
+            print("RL is deactivated")
+            
     # ------------------------------
     # 4. 데이터 전처리: 동적 패딩을 위해 max_length 없이 토크나이즈 (단, truncation은 True로 설정)
     # ------------------------------
@@ -191,8 +206,18 @@ def main():
         with open(sample_file, "w", encoding="utf-8") as f:
             json.dump(sample_list, f, indent=4, ensure_ascii=False)
         eval_step_counter += 1
+        
+        EPOCH += 1
+        if args.do_RL:
+            if EPOCH >= args.RL_start_epoch:
+                model.config.do_RL = True
+                print("RL is activated")
+            else:
+                model.config.do_RL = False
+                print("RL is deactivated")
 
         return result
+    
     print("tokenizer token map", tokenizer.special_tokens_map)
     print("model config:", model.config)
     # ------------------------------
