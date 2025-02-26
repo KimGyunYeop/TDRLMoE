@@ -61,7 +61,7 @@ def parse_args():
     parser.add_argument("--run_name", type=str, default="run", help="Wandb run name")
     
     #RL인자
-    parser.add_argument("--do_RL", action="store_true", default=True, help="Use Reinforcement Learning")
+    parser.add_argument("--do_RL", action="store_true", default=False, help="Use Reinforcement Learning")
     parser.add_argument("--RL_expert_change_ratio", type=float, default=0.1, help="Expert change ratio")
     parser.add_argument("--RL_sample_num", type=int, default=4, help="Number of samples for RL")
     parser.add_argument("--RL_loss_coef", type=float, default=1.0, help="RL loss coefficient")
