@@ -2177,6 +2177,8 @@ class SwitchTransformersForConditionalGeneration(SwitchTransformersPreTrainedMod
                     reward = reward.sign()
                 elif self.RL_reward_stretegy == "minus":
                     reward = reward.clamp(-1, 1)
+                elif self.RL_reward_stretegy == "positive":
+                    reward = reward.clamp(0, 1)
                 
                 for k in range(len(brp)):
                     if len(brp[k][0]) <= 1:
