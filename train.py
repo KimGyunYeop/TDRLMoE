@@ -76,7 +76,7 @@ def parse_args():
 
 def main():
     args = parse_args()
-    
+    EPOCH=0
     exp_name = f"samsum-{args.model_name.replace('/', '-')}"
     
     if args.do_RL:
