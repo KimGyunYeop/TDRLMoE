@@ -156,20 +156,24 @@ class SwitchTransformersConfig(PretrainedConfig):
         do_RL = True,
         RL_sample_num = 4,
         RL_loss_coef = 1.0,
-        RL_sample_stretege = "multinoimal",
+        RL_sample_stretegy = "multinomial",
         RL_base_logit_type = "top1",
         RL_reward_stretegy = "minus",
         use_sample_lm_loss = False,
+        RL_algo = "reinforce",
+        RL_ppo_eps = 0.2,
         **kwargs,
     ):
         self.RL_expert_change_ratio = RL_expert_change_ratio
         self.do_RL = do_RL
         self.RL_sample_num = RL_sample_num
         self.RL_loss_coef = RL_loss_coef
-        self.RL_sample_stretege = RL_sample_stretege
+        self.RL_sample_stretegy = RL_sample_stretegy
         self.RL_base_logit_type = RL_base_logit_type
         self.use_sample_lm_loss = use_sample_lm_loss
         self.RL_reward_stretegy=RL_reward_stretegy
+        self.RL_algo = RL_algo
+        self.RL_ppo_eps = RL_ppo_eps
         
         self.vocab_size = vocab_size
         self.d_model = d_model
@@ -316,7 +320,7 @@ class SwitchTransformersTop1Router(nn.Module):
         self.jitter_noise = config.router_jitter_noise
         self.ignore_padding_tokens = config.router_ignore_padding_tokens
         self.dtype = getattr(torch, config.router_dtype)
-        self.RL_sample_stretege = config.RL_sample_stretege
+        self.RL_sample_stretegy = config.RL_sample_stretegy
 
     def _compute_router_probabilities(self, hidden_states: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         r"""
@@ -382,9 +386,9 @@ class SwitchTransformersTop1Router(nn.Module):
         
         if current_change_map is not None:
             
-            if self.RL_sample_stretege == "multinoimal":
+            if self.RL_sample_stretegy == "multinomial":
                 mapping_expert_index = torch.multinomial(router_probs.view(-1, self.num_experts), 1).view(expert_index.shape)
-            elif self.RL_sample_stretege == "random":
+            elif self.RL_sample_stretegy == "random":
                 mapping_expert_index = torch.randint(0, self.num_experts, expert_index.shape, device=expert_index.device)
             
             expert_index[:, current_change_map] = mapping_expert_index[:, current_change_map]
@@ -1946,6 +1950,8 @@ class SwitchTransformersForConditionalGeneration(SwitchTransformersPreTrainedMod
         self.RL_base_logit_type = config.RL_base_logit_type
         self.use_sample_lm_loss = config.use_sample_lm_loss
         self.RL_reward_stretegy = config.RL_reward_stretegy
+        self.RL_algo = config.RL_algo
+        self.RL_ppo_eps = config.RL_ppo_eps
 
         # Initialize weights and apply final processing
         self.post_init()
@@ -2089,13 +2095,14 @@ class SwitchTransformersForConditionalGeneration(SwitchTransformersPreTrainedMod
         )
 
         sequence_output = decoder_outputs[0]
-
+        
         if self.config.tie_word_embeddings:
             # Rescale output before projecting on vocab
             # See https://github.com/tensorflow/mesh/blob/fa19d69eafc9a482aff0b59ddd96b025c0cb207d/mesh_tensorflow/transformer/transformer.py#L586
             sequence_output = sequence_output * (self.model_dim**-0.5)
 
         lm_logits = self.lm_head(sequence_output)
+
         
         # RL
         if self.do_RL and self.training:
@@ -2103,12 +2110,12 @@ class SwitchTransformersForConditionalGeneration(SwitchTransformersPreTrainedMod
                 router_probs_list = []
                 branch_logits_list = [] 
             else:
-                router_probs_list = [sequence_output.router_probs]
+                router_probs_list = [decoder_outputs.router_probs]
                 branch_logits_list = [lm_logits]
                 
-            seq_length = input_ids.shape[1] if input_ids is not None else 128
-            num_blocks = self.encoder.config.num_layers
-            encoder_change_map = generate_change_map(seq_length, num_blocks, self.RL_expert_change_ratio)
+            # seq_length = input_ids.shape[1] if input_ids is not None else 128
+            # num_blocks = self.encoder.config.num_layers
+            # encoder_change_map = generate_change_map(seq_length, num_blocks, self.RL_expert_change_ratio)
         
             # 예) seq_length = decoder_input_ids.size(1) (or something similar)
             seq_length = decoder_input_ids.shape[1] if decoder_input_ids is not None else 128
@@ -2164,8 +2171,16 @@ class SwitchTransformersForConditionalGeneration(SwitchTransformersPreTrainedMod
             rl_losses = []
             if self.RL_base_logit_type == "top1":
                 baseline_probs = self._compute_label_probs(lm_logits, labels)  # token별 p(correct)
-            elif self.RL_base_logit_type == "mean":
-                baseline_probs = torch.cat(branch_logits_list, dim=-1).mean(dim=-1)
+            elif self.RL_base_logit_type == "mean":# (b, seq, vocab) 형태의 logits들을 쌓아서 (b, N, seq, vocab) 만든 뒤
+                # all_logits = torch.stack(branch_logits_list, dim=1)  # dim=1에 샘플 수 배치
+                # # 샘플 방향으로 평균 -> (b, seq, vocab)
+                # mean_logits = all_logits.mean(dim=1)
+                # baseline_probs = self._compute_label_probs(mean_logits, labels)
+                p_branches = []
+                for bl in branch_logits_list:
+                    p_branch = self._compute_label_probs(bl, labels)
+                    p_branches.append(p_branch)
+                baseline_probs = torch.stack(p_branches, dim=0).mean(dim=0)
                 
             for bl, brp in zip(branch_logits_list, router_probs_list):
                 p_branch = self._compute_label_probs(bl, labels)
@@ -2176,9 +2191,11 @@ class SwitchTransformersForConditionalGeneration(SwitchTransformersPreTrainedMod
                 if self.RL_reward_stretegy == "static":
                     reward = reward.sign()
                 elif self.RL_reward_stretegy == "minus":
-                    reward = reward.clamp(-1, 1)
+                    reward = reward
                 elif self.RL_reward_stretegy == "positive":
                     reward = reward.clamp(0, 1)
+                elif self.RL_reward_stretegy == "clamp":
+                    reward = reward.clamp(-1, 1)
                 
                 for k in range(len(brp)):
                     if len(brp[k][0]) <= 1:
@@ -2186,13 +2203,46 @@ class SwitchTransformersForConditionalGeneration(SwitchTransformersPreTrainedMod
                     router_prob = torch.nn.functional.softmax(brp[k][0], dim=-1)
                     chosen_prob = torch.gather(
                         router_prob, 
-                        1, 
+                        -1, 
                         brp[k][1].unsqueeze(-1)
                     ).squeeze(-1)  # -> shape(b, seq)
                     
-                    logp = torch.log(chosen_prob + 1e-12).to(baseline_probs.device)  # -> shape(b, seq)
-                
-                    rl_loss_i = -(reward * logp).mean()
+                    if self.RL_algo == "ppo":
+                        baseline_logs =  torch.nn.functional.softmax(decoder_outputs.router_probs[k][0], dim=-1)
+                        baseline_logs =  torch.gather(
+                            baseline_logs, 
+                            -1, 
+                            decoder_outputs.router_probs[k][1].unsqueeze(-1)
+                        ).squeeze(-1)
+                        baseline_logs = torch.log(baseline_logs + 1e-12).to(baseline_probs.device)
+    
+                        chosen_logs = torch.log(chosen_prob + 1e-12).to(baseline_probs.device)
+                        
+                        ratio = torch.exp(chosen_logs - baseline_logs.detach())
+                        cliped_ratio = ratio.clamp(1-self.RL_ppo_eps, 1+self.RL_ppo_eps)
+                        
+                        change_map_tensor = torch.tensor(decoder_change_map[k], device=reward.device, dtype=torch.bool)
+                        change_map_tensor = change_map_tensor.unsqueeze(0).expand_as(reward)
+                        change_tokens_count = (change_map_tensor == True).sum()
+                        if change_tokens_count.item() == 0:
+                            rl_loss_i = torch.tensor(0.0, device=reward.device)
+                        else:
+                            rl_loss_i = (-torch.min(ratio * reward, cliped_ratio * reward) * change_map_tensor).sum() / change_tokens_count
+                        # rl_loss_i = -torch.min(ratio * reward, cliped_ratio * reward).mean()
+                        
+                    elif self.RL_algo == "reinforce":
+                        logp = torch.log(chosen_prob + 1e-12).to(baseline_probs.device)  # -> shape(b, seq)
+                        
+                        change_map_tensor = torch.tensor(decoder_change_map[k], device=reward.device, dtype=torch.bool)
+                        change_map_tensor = change_map_tensor.unsqueeze(0).expand_as(reward)
+                        change_tokens_count = (change_map_tensor == True).sum()
+                        
+                        if change_tokens_count.item() == 0:
+                            rl_loss_i = torch.tensor(0.0, device=reward.device)
+                        else:
+                            rl_loss_i = -(reward * logp * change_map_tensor).sum() / change_tokens_count
+                        # rl_loss_i = -(reward * logp).mean()
+                        
                     rl_losses.append(rl_loss_i)
                     
             rl_loss = torch.stack(rl_losses).mean()
@@ -2245,7 +2295,7 @@ class SwitchTransformersForConditionalGeneration(SwitchTransformersPreTrainedMod
             
             if self.use_sample_lm_loss:
                 if self.RL_base_logit_type == "top1":
-                    branch_logits_list = branch_logits_list[2:]
+                    branch_logits_list = branch_logits_list[1:]
                 
                 sample_lm_loss_fct = CrossEntropyLoss(ignore_index=-100)
                 sample_lm_loss = None

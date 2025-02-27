@@ -65,11 +65,13 @@ def parse_args():
     parser.add_argument("--RL_expert_change_ratio", type=float, default=0.1, help="Expert change ratio")
     parser.add_argument("--RL_sample_num", type=int, default=4, help="Number of samples for RL")
     parser.add_argument("--RL_loss_coef", type=float, default=1.0, help="RL loss coefficient")
-    parser.add_argument("--RL_sample_stretege", type=str, default="multinoimal", help="RL sample strategy", choices=["multinoimal", "random"])
+    parser.add_argument("--RL_sample_stretegy", type=str, default="multinomial", help="RL sample strategy", choices=["multinomial", "random"])
     parser.add_argument("--RL_base_logit_type", type=str, default="top1", help="RL base logit type", choices=["top1", "mean"])
-    parser.add_argument("--RL_reward_stretegy", type=str, default="minus", help="RL base logit type", choices=["minus", "static", "positive"])
+    parser.add_argument("--RL_reward_stretegy", type=str, default="minus", help="RL base logit type", choices=["minus", "static", "positive", "clamp"])
     parser.add_argument("--use_sample_lm_loss", action="store_true", default=False, help="Use Reinforcement Learning")
     parser.add_argument("--RL_start_epoch", type=int, default=0)
+    parser.add_argument("--RL_algo", default="minus", help="RL  type", choices=["reinforce", "ppo"])
+    parser.add_argument("--RL_ppo_eps", type=float, default=0.2, help="RL loss coefficient")
     
     return parser.parse_args()
 
@@ -84,7 +86,7 @@ def main():
         run_name_parts = ["RL"]
 
         # RL 샘플링 전략
-        run_name_parts.append(args.RL_sample_stretege)  # e.g. "multinoimal" or "random"
+        run_name_parts.append(args.RL_sample_stretegy)  # e.g. "multinomial" or "random"
         
         # Expert 교체 비율
         run_name_parts.append(f"exp{args.RL_expert_change_ratio}")
@@ -109,7 +111,7 @@ def main():
             run_name_parts.append("samplm")
         
         # run_name 뒤에 조합된 정보 이어붙이기
-        # 예: 기존 args.run_name="myrun" -> "myrun_RL_multinoimal_exp0.1_num4_coef1.0_top1_minus_samplm"
+        # 예: 기존 args.run_name="myrun" -> "myrun_RL_multinomial_exp0.1_num4_coef1.0_top1_minus_samplm"
         args.run_name += "_" + "_".join(run_name_parts)
 
 
@@ -136,7 +138,13 @@ def main():
     model_config.RL_expert_change_ratio = args.RL_expert_change_ratio
     model_config.RL_sample_num = args.RL_sample_num
     model_config.RL_loss_coef = args.RL_loss_coef
-    model_config.RL_sample_stretege = args.RL_sample_stretege
+    model_config.RL_sample_stretegy = args.RL_sample_stretegy
+    model_config.RL_base_logit_type = args.RL_base_logit_type
+    model_config.RL_reward_stretegy = args.RL_reward_stretegy
+    model_config.use_sample_lm_loss = args.use_sample_lm_loss
+    model_config.RL_start_epoch = args.RL_start_epoch
+    model_config.RL_algo = args.RL_algo
+    model_config.RL_ppo_eps = args.RL_ppo_eps
     
     
     print(model_config)
