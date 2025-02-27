@@ -195,6 +195,7 @@ def main():
 
     def compute_metrics(eval_preds):
         nonlocal eval_step_counter
+        nonlocal EPOCH
         preds, labels = eval_preds
         if isinstance(preds, tuple):
             preds = preds[0]
