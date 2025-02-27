@@ -242,7 +242,7 @@ def main():
         adam_beta2=0.999,
         adam_epsilon=1e-08,
         fp16=args.fp16,
-        save_total_limit=3,  # 최근 3개 체크포인트만 유지
+        save_total_limit=1, 
     )
 
     trainer = Seq2SeqTrainer(
