@@ -14,31 +14,44 @@ from Custom_MoE3 import SwitchTransformersForConditionalGeneration, SwitchTransf
 import os
 import torch
 
-# ------------------------------
-# 1. 커스텀 Trainer 클래스 정의 (추가 loss 로깅)
-# ------------------------------
+from transformers import Seq2SeqTrainer
+
 class CustomSeq2SeqTrainer(Seq2SeqTrainer):
-    def compute_loss(self, model, inputs, return_outputs=False, **kwargs):
+    """
+    Seq2SeqTrainer를 상속받아, 모델에서 반환되는 추가 손실들을 
+    wandb 로그에 기록하기 위해 compute_loss를 오버라이드한 예시
+    """
+    def compute_loss(self, model, inputs, return_outputs=False):
+        # 모델 forward
         outputs = model(**inputs)
-        # 기본 loss 추출
-        loss = outputs.loss if hasattr(outputs, "loss") else outputs[0]
-        
-        # 추가 loss들 추출
-        extra_loss_names = [
-            "encoder_z_loss", "encoder_aux_loss",
-            "decoder_z_loss", "decoder_aux_loss",
-            "decoder_rl_loss", "sample_lm_loss", "loss"
-        ]
-        extra_losses = {}
-        for name in extra_loss_names:
-            loss_value = getattr(outputs, name, None)
-            if loss_value is not None:
-                extra_losses[name] = loss_value.item()
-        
-        # wandb에 추가 loss 로그 기록
-        wandb.log(extra_losses)
-        
+        # 메인 loss (총합된 loss)
+        loss = outputs.loss if outputs.loss is not None else outputs[0]
+
+        # 추가로 반환된 손실들을 로깅
+        # (None이 아닌 것들만 뽑아 wandb로 보낸다)
+        log_dict = {}
+        for loss_name in [
+            "lm_loss", 
+            "encoder_z_loss", 
+            "decoder_z_loss", 
+            "encoder_aux_loss", 
+            "decoder_aux_loss", 
+            "decoder_rl_loss",
+            "sample_lm_loss"
+        ]:
+            val = getattr(outputs, loss_name, None)
+            if val is not None:
+                # 텐서 -> float 값으로 바꿔서 로깅
+                log_dict[loss_name] = val.detach().float().mean().item()
+
+        # Trainer 내부에서 self.log(...)를 쓰면 
+        # wandb와 같은 logger에 바로 기록된다.
+        if len(log_dict) > 0:
+            self.log(log_dict)
+
+        # 기본적으로 loss만 반환하면 Trainer가 자동 backward+optimizer.step
         return (loss, outputs) if return_outputs else loss
+
 
 
 def parse_args():
@@ -254,7 +267,7 @@ def main():
         save_total_limit=1, 
     )
 
-    trainer = Seq2SeqTrainer(
+    trainer = CustomSeq2SeqTrainer(
         model=model,
         args=training_args,
         train_dataset=tokenized_dataset["train"],
