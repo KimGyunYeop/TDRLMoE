@@ -31,7 +31,6 @@ class CustomSeq2SeqTrainer(Seq2SeqTrainer):
         # (None이 아닌 것들만 뽑아 wandb로 보낸다)
         log_dict = {}
         for loss_name in [
-            "loss",
             "lm_loss", 
             "encoder_z_loss", 
             "decoder_z_loss", 
