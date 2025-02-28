@@ -16,42 +16,33 @@ import torch
 
 from transformers import Seq2SeqTrainer
 
+from transformers import Seq2SeqTrainer
+
 class CustomSeq2SeqTrainer(Seq2SeqTrainer):
-    """
-    Seq2SeqTrainer를 상속받아, 모델에서 반환되는 추가 손실들을 
-    wandb 로그에 기록하기 위해 compute_loss를 오버라이드한 예시
-    """
-    def compute_loss(self, model, inputs, return_outputs=False):
-        # 모델 forward
+    def training_step(self, model, inputs):
+        model.train()
+        inputs = self._prepare_inputs(inputs)
+        # 모델의 forward가 return_dict=True인 경우 ModelOutput (여기서는 Seq2SeqMoEOutput)로 반환됨
         outputs = model(**inputs)
-        # 메인 loss (총합된 loss)
-        loss = outputs.loss if outputs.loss is not None else outputs[0]
+        loss = outputs.loss
+        # outputs는 ModelOutput이므로 to_dict()를 통해 모든 항목을 dict로 가져올 수 있음
+        output_dict = outputs.to_dict() if hasattr(outputs, "to_dict") else outputs
 
-        # 추가로 반환된 손실들을 로깅
-        # (None이 아닌 것들만 뽑아 wandb로 보낸다)
+        # logging_dict에 추가하고자 하는 각 loss 항목들을 추출
         log_dict = {}
-        for loss_name in [
-            "lm_loss", 
-            "encoder_z_loss", 
-            "decoder_z_loss", 
-            "encoder_aux_loss", 
-            "decoder_aux_loss", 
-            "decoder_rl_loss",
-            "sample_lm_loss"
-        ]:
-            val = getattr(outputs, loss_name, None)
-            if val is not None:
-                # 텐서 -> float 값으로 바꿔서 로깅
-                log_dict[loss_name] = val.detach().float().mean().item()
+        for key in ["lm_loss", "encoder_z_loss", "decoder_z_loss",
+                    "encoder_aux_loss", "decoder_aux_loss", "decoder_rl_loss", "sample_lm_loss"]:
+            if key in output_dict and output_dict[key] is not None:
+                # 텐서를 스칼라 값으로 변환해서 log
+                log_dict[key] = output_dict[key].detach().item()
+        
+        # 기존 loss 값도 함께 log에 추가
+        log_dict["loss"] = loss.detach().item()
 
-        # Trainer 내부에서 self.log(...)를 쓰면 
-        # wandb와 같은 logger에 바로 기록된다.
-        if len(log_dict) > 0:
-            self.log(log_dict)
+        # wandb 등 로그 시스템에 기록 (Trainer 내부의 self.log 호출)
+        self.log(log_dict)
 
-        # 기본적으로 loss만 반환하면 Trainer가 자동 backward+optimizer.step
-        return (loss, outputs) if return_outputs else loss
-
+        return loss
 
 
 def parse_args():
@@ -127,6 +118,10 @@ def main():
         # 예: 기존 args.run_name="myrun" -> "myrun_RL_multinomial_exp0.1_num4_coef1.0_top1_minus_samplm"
         args.run_name += "_" + "_".join(run_name_parts)
 
+    #이미 결과파일이 있으면 종료
+    if os.path.exists(f"results/{exp_name}/{args.run_name}/pred_gold_samples.json"):
+        print("Results already exist. Skipping training.")
+        return
 
     output_dir = f"results/{exp_name}/{args.run_name}"
     os.makedirs(f"results/{exp_name}/{args.run_name}", exist_ok=True)
