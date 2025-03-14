@@ -289,6 +289,11 @@ def main():
     tokenized_dataset = dataset.map(preprocess_function, batched=True, remove_columns=dataset["train"].column_names)
 
     data_collator = DataCollatorForSeq2Seq(tokenizer=tokenizer, model=model)
+    
+    # ---------------------------------------------------------
+    # 1에폭에 두번씩 eval을 수행하도록 설정
+    # ---------------------------------------------------------\
+    eval_steps = len(tokenized_dataset["train"]) // (args.per_device_train_batch_size * 2)
 
     # ---------------------------------------------------------
     # Training Arguments 설정
@@ -296,7 +301,7 @@ def main():
     training_args = Seq2SeqTrainingArguments(
         output_dir=output_dir,
         evaluation_strategy="steps",
-        eval_steps=1000,
+        eval_steps=eval_steps,
         learning_rate=args.learning_rate,
         per_device_train_batch_size=args.per_device_train_batch_size,
         per_device_eval_batch_size=args.per_device_eval_batch_size,
