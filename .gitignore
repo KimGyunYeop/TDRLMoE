@@ -11,3 +11,4 @@ wandb-summary.json
 *.sh
 *.log
 *.out
+outputs/*
