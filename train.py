@@ -40,6 +40,38 @@ class CustomSeq2SeqTrainer(Seq2SeqTrainer):
             self.log(log_dict)
         return (loss, outputs) if return_outputs else loss
 
+# 커스텀 콜백 클래스: 각 epoch가 끝날 때마다 test 데이터셋 평가
+class TestEvaluationCallback(TrainerCallback):
+    def __init__(self, test_dataset, compute_metrics, tokenizer, task):
+        self.test_dataset = test_dataset
+        self.compute_metrics = compute_metrics
+        self.tokenizer = tokenizer
+        self.task = task
+
+    def on_epoch_end(self, args, state, control, **kwargs):
+        trainer = kwargs["trainer"]
+        test_results = trainer.predict(self.test_dataset)
+        predictions = test_results.predictions
+        labels = test_results.label_ids
+
+        if self.task in ["summarization", "qa", "nlu"]:
+            preds = np.where(predictions != -100, predictions, self.tokenizer.pad_token_id)
+            labels = np.where(labels != -100, labels, self.tokenizer.pad_token_id)
+            decoded_preds = self.tokenizer.batch_decode(preds, skip_special_tokens=True)
+            decoded_labels = self.tokenizer.batch_decode(labels, skip_special_tokens=True)
+        elif self.task == "text_generation":
+            decoded_preds = self.tokenizer.batch_decode(predictions, skip_special_tokens=True)
+            decoded_labels = self.tokenizer.batch_decode(labels, skip_special_tokens=True)
+        
+        if self.task == "text_generation":
+            test_metrics = {}
+        else:
+            test_metrics = self.compute_metrics((predictions, labels))
+        
+        print(f"Test metrics at epoch {state.epoch}: {test_metrics}")
+        wandb.log({f"test_{k}": v for k, v in test_metrics.items()})
+        return control
+
 # ---------------------------------------------------------
 # Argument parsing (dataset_name에 따라 자동으로 태스크 결정)
 # ---------------------------------------------------------
@@ -329,6 +361,8 @@ def main():
         data_collator=data_collator,
         compute_metrics=compute_metrics,
     )
+    trainer.add_callback(TestEvaluationCallback(tokenized_dataset["test"], compute_metrics, tokenizer, task))
+
 
     # ---------------------------------------------------------
     # 모델 학습 및 평가
