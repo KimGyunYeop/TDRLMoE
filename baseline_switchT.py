@@ -21,10 +21,19 @@ class TestEvaluationCallback(TrainerCallback):
         self.compute_metrics = compute_metrics
         self.tokenizer = tokenizer
         self.task = task
+        self.trainer = None
+
+    def on_train_begin(self, args, state, control, **kwargs):
+        # trainer 인스턴스를 저장합니다.
+        self.trainer = kwargs.get("trainer", None)
 
     def on_epoch_end(self, args, state, control, **kwargs):
-        trainer = kwargs["trainer"]
-        test_results = trainer.predict(self.test_dataset)
+        # 저장된 trainer를 사용합니다.
+        if self.trainer is None:
+            print("Trainer is not set in callback.")
+            return control
+
+        test_results = self.trainer.predict(self.test_dataset)
         predictions = test_results.predictions
         labels = test_results.label_ids
 
