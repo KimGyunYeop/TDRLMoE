@@ -10,6 +10,7 @@ from transformers import (
     DataCollatorForSeq2Seq,
     Seq2SeqTrainingArguments,
     Seq2SeqTrainer,
+    TrainerCallback,
 )
 from Custom_MoE3 import SwitchTransformersForConditionalGeneration, SwitchTransformersConfig
 import os

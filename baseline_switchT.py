@@ -9,6 +9,7 @@ from transformers import (
     DataCollatorForSeq2Seq,
     Seq2SeqTrainingArguments,
     Seq2SeqTrainer,
+    TrainerCallback,
 )
 from base_Switch_Transformer import SwitchTransformersForConditionalGeneration
 import os
