@@ -149,8 +149,8 @@ def parse_args():
     parser.add_argument("--RL_ppo_eps", type=float, default=0.2, help="RL PPO epsilon")
     # Generation 인자 추가
     parser.add_argument("--gen_min_length", type=int, default=10, help="Minimum generation length")
-    parser.add_argument("--gen_max_length", type=int, default=60, help="Maximum generation length")
-    parser.add_argument("--gen_no_repeat_ngram_size", type=int, default=3, help="No repeat ngram size")
+    parser.add_argument("--gen_max_length", type=int, default=128, help="Maximum generation length")
+    parser.add_argument("--gen_no_repeat_ngram_size", type=int, default=5, help="No repeat ngram size")
     parser.add_argument("--gen_num_beams", type=int, default=6, help="Number of beams for generation")
     # source_prefix 인자 추가 (summarization 전처리 시 사용)
     parser.add_argument("--source_prefix", type=str, default="summarize: ", help="Source prefix to prepend to input text for summarization")
@@ -387,7 +387,7 @@ def main():
     training_args = Seq2SeqTrainingArguments(
         output_dir=output_dir,
         evaluation_strategy="steps",
-        eval_steps=eval_steps,
+        eval_steps=100,
         learning_rate=args.learning_rate,
         per_device_train_batch_size=args.per_device_train_batch_size,
         per_device_eval_batch_size=args.per_device_eval_batch_size,
@@ -401,7 +401,7 @@ def main():
         seed=args.seed,
         fp16=args.fp16,
         save_total_limit=1,
-        eval_accumulation_steps=2  # 이 값을 조정하면서 GPU 메모리 사용량을 관리해보세요.
+        eval_accumulation_steps=50 
     )
 
     # Generation 인자 딕셔너리 생성
