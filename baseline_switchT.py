@@ -3,6 +3,7 @@ import numpy as np
 import json
 import wandb
 import evaluate
+import nltk
 from datasets import load_dataset
 from transformers import (
     AutoTokenizer,
@@ -15,25 +16,48 @@ from base_Switch_Transformer import SwitchTransformersForConditionalGeneration
 import os
 import torch
 
+# nltk 문장 토크나이저가 없으면 다운로드
+try:
+    nltk.download('punkt_tab')
+    nltk.data.find("tokenizers/punkt")
+except LookupError:
+    nltk.download("punkt")
+
+def postprocess_text(preds, labels):
+    """
+    예측문과 정답 문장을 각각 strip한 후 nltk.sent_tokenize를 사용해 문장 단위로 분리하고,
+    각 문장 사이에 줄바꿈을 추가합니다.
+    """
+    str_preds = [pred.strip() for pred in preds]
+    str_labels = [label.strip() for label in labels]
+    preds = ["\n".join(nltk.sent_tokenize(pred)) for pred in str_preds]
+    labels = ["\n".join(nltk.sent_tokenize(label)) for label in str_labels]
+    return preds, labels, str_preds, str_labels
+
 class TestEvaluationCallback(TrainerCallback):
-    def __init__(self, test_dataset, compute_metrics, tokenizer, task):
+    def __init__(self, test_dataset, compute_metrics, tokenizer, task, generation_kwargs):
         self.test_dataset = test_dataset
         self.compute_metrics = compute_metrics
         self.tokenizer = tokenizer
         self.task = task
         self.trainer = None
+        self.generation_kwargs = generation_kwargs
 
     def on_train_begin(self, args, state, control, **kwargs):
         # trainer 인스턴스를 저장합니다.
         self.trainer = kwargs.get("trainer", None)
 
     def on_epoch_end(self, args, state, control, **kwargs):
-        # 저장된 trainer를 사용합니다.
+        # 5 에폭마다 평가 수행
+        if int(state.epoch) % 5 != 0:
+            return control
+
         if self.trainer is None:
             print("Trainer is not set in callback.")
             return control
 
-        test_results = self.trainer.predict(self.test_dataset)
+        # predict 호출 시 생성 인자 전달
+        test_results = self.trainer.predict(self.test_dataset, **self.generation_kwargs)
         predictions = test_results.predictions
         labels = test_results.label_ids
 
@@ -46,10 +70,10 @@ class TestEvaluationCallback(TrainerCallback):
             decoded_preds = self.tokenizer.batch_decode(predictions, skip_special_tokens=True)
             decoded_labels = self.tokenizer.batch_decode(labels, skip_special_tokens=True)
         
-        if self.task == "text_generation":
-            test_metrics = {}
-        else:
+        if self.task != "text_generation":
             test_metrics = self.compute_metrics((predictions, labels))
+        else:
+            test_metrics = {}
         
         print(f"Test metrics at epoch {state.epoch}: {test_metrics}")
         wandb.log({f"test_{k}": v for k, v in test_metrics.items()})
@@ -81,23 +105,38 @@ def parse_args():
     # 기타 옵셔널 인자
     parser.add_argument("--seed", type=int, default=42, help="Random seed for reproducibility")
     parser.add_argument("--run_name", type=str, default="baseline", help="Wandb run name")
+    # Generation 인자 추가
+    parser.add_argument("--gen_min_length", type=int, default=10, help="Minimum generation length")
+    parser.add_argument("--gen_max_length", type=int, default=60, help="Maximum generation length")
+    parser.add_argument("--gen_no_repeat_ngram_size", type=int, default=3, help="No repeat ngram size")
+    parser.add_argument("--gen_num_beams", type=int, default=6, help="Number of beams for generation")
+    # source_prefix 인자 추가 (summarization 전처리 시 사용)
+    parser.add_argument("--source_prefix", type=str, default="summarize: ", help="Source prefix to prepend to input text for summarization")
     return parser.parse_args()
 
 def main():
     args = parse_args()
-    
-    # dataset_name에 따라 태스크 자동 결정
+
+    # data# dataset_name에 따라 task와 기본 prefix를 자동으로 결정
     if args.dataset_name in ["samsum", "xsum", "cnn_dailymail"]:
         task = "summarization"
+        default_prefix = "summarize: "
     elif args.dataset_name in ["openwebtext", "wikitext-2", "wikitext-103"]:
-        task = "text_generation"
+        task = "text_generation"  # 텍스트 생성(언어모델링) 태스크
+        default_prefix = ""         # prefix가 필요없으면 빈 문자열로 설정하거나 "generate: " 등으로 지정 가능
     elif args.dataset_name in ["glue", "superglue"]:
         task = "nlu"
+        default_prefix = "classify: "  # 예시: 문장 분류 태스크로 인식하도록 prefix 부여
     elif args.dataset_name == "squad_v1":
         task = "qa"
+        default_prefix = "question: "  # 질문에 대한 prefix 부여
     else:
         raise ValueError(f"Unsupported dataset: {args.dataset_name}")
+
     args.task = task
+    # 사용자가 별도로 source_prefix를 지정하지 않았다면 기본값을 사용
+    if not hasattr(args, "source_prefix") or args.source_prefix is None:
+        args.source_prefix = default_prefix
 
     exp_name = f"{args.dataset_name}-{args.model_name.replace('/', '-')}-{task}"
     output_dir = os.path.join("results", exp_name, args.run_name)
@@ -139,41 +178,67 @@ def main():
     tokenizer = AutoTokenizer.from_pretrained(args.model_name)
     model = SwitchTransformersForConditionalGeneration.from_pretrained(args.model_name, device_map="auto")
     
-    # ------------------------------
-    # 4. 전처리 함수 설정 (태스크별 분기)
-    # ------------------------------
+    # ---------------------------------------------------------
+    # 전처리 함수 및 평가 지표 (태스크별)
+    # ---------------------------------------------------------
     if task == "summarization":
+        # 입력 텍스트 앞에 source_prefix 적용 (예: "summarize: ")
         def preprocess_function(batch):
+            # 예: samsum, xsum, cnn_dailymail 등
             if "dialogue" in batch and "summary" in batch:
-                inputs = tokenizer(batch["dialogue"], truncation=True)
+                inputs = tokenizer([args.source_prefix + dialogue for dialogue in batch["dialogue"]], truncation=True)
                 with tokenizer.as_target_tokenizer():
                     labels = tokenizer(batch["summary"], truncation=True)
             elif "document" in batch and "summary" in batch:
-                inputs = tokenizer(batch["document"], truncation=True)
+                inputs = tokenizer([args.source_prefix + doc for doc in batch["document"]], truncation=True)
                 with tokenizer.as_target_tokenizer():
                     labels = tokenizer(batch["summary"], truncation=True)
             else:
                 # 예: XSum는 "article"과 "highlights" 사용
-                inputs = tokenizer(batch["article"], truncation=True)
+                inputs = tokenizer([args.source_prefix + article for article in batch["article"]], truncation=True)
                 with tokenizer.as_target_tokenizer():
                     labels = tokenizer(batch["highlights"], truncation=True)
             inputs["labels"] = labels["input_ids"]
             return inputs
+
+        rouge_metric = evaluate.load("rouge")
+        def compute_metrics(eval_preds):
+            preds, labels = eval_preds
+            if isinstance(preds, tuple):
+                preds = preds[0]
+            preds = np.where(preds != -100, preds, tokenizer.pad_token_id)
+            labels = np.where(labels != -100, labels, tokenizer.pad_token_id)
+            decoded_preds = tokenizer.batch_decode(preds, skip_special_tokens=True)
+            decoded_labels = tokenizer.batch_decode(labels, skip_special_tokens=True)
+            # postprocessing: 문장 단위 줄바꿈 적용
+            decoded_preds, decoded_labels, _, _ = postprocess_text(decoded_preds, decoded_labels)
+            result = rouge_metric.compute(predictions=decoded_preds, references=decoded_labels, use_stemmer=True)
+            result = {key: round(value * 100, 4) for key, value in result.items()}
+            return result
+
     elif task == "text_generation":
         def preprocess_function(batch):
-            inputs = tokenizer(batch["text"], truncation=True)
+            # 텍스트 생성 태스크의 경우, prefix가 있으면 입력 앞에 추가
+            if args.source_prefix:
+                inputs = tokenizer([args.source_prefix + text for text in batch["text"]], truncation=True)
+            else:
+                inputs = tokenizer(batch["text"], truncation=True)
             inputs["labels"] = inputs["input_ids"].copy()
             return inputs
+        def compute_metrics(eval_preds):
+            return {}
+
     elif task == "nlu":
         def preprocess_function(batch):
+            # NLU 태스크의 경우, 예시로 sentence1에 prefix를 붙임 (필요에 따라 조정 가능)
             if "sentence1" in batch and "sentence2" in batch:
-                inputs = tokenizer(batch["sentence1"], batch["sentence2"], truncation=True)
+                inputs = tokenizer([args.source_prefix + s for s in batch["sentence1"]], batch["sentence2"], truncation=True)
             elif "premise" in batch and "hypothesis" in batch:
-                inputs = tokenizer(batch["premise"], batch["hypothesis"], truncation=True)
+                inputs = tokenizer([args.source_prefix + p for p in batch["premise"]], batch["hypothesis"], truncation=True)
             elif "sentence" in batch:
-                inputs = tokenizer(batch["sentence"], truncation=True)
+                inputs = tokenizer([args.source_prefix + s for s in batch["sentence"]], truncation=True)
             elif "text" in batch:
-                inputs = tokenizer(batch["text"], truncation=True)
+                inputs = tokenizer([args.source_prefix + t for t in batch["text"]], truncation=True)
             else:
                 inputs = tokenizer(batch[list(batch.keys())[0]], truncation=True)
             if "label" in batch:
@@ -184,43 +249,7 @@ def main():
             else:
                 inputs["labels"] = None
             return inputs
-    elif task == "qa":
-        def preprocess_function(batch):
-            inputs = tokenizer(batch["question"], batch["context"], truncation=True)
-            answers = [ans[0] if len(ans) > 0 else "" for ans in batch["answers"]["text"]]
-            with tokenizer.as_target_tokenizer():
-                labels = tokenizer(answers, truncation=True)
-            inputs["labels"] = labels["input_ids"]
-            return inputs
 
-    # remove_columns는 train split의 컬럼 이름 사용
-    tokenized_dataset = dataset.map(preprocess_function, batched=True, remove_columns=dataset["train"].column_names)
-    
-    # ------------------------------
-    # 5. Data Collator
-    # ------------------------------
-    data_collator = DataCollatorForSeq2Seq(tokenizer=tokenizer, model=model)
-
-    # ------------------------------
-    # 6. 평가 지표 함수 설정 (태스크별 분기)
-    # ------------------------------
-    if task == "summarization":
-        rouge_metric = evaluate.load("rouge")
-        def compute_metrics(eval_preds):
-            preds, labels = eval_preds
-            if isinstance(preds, tuple):
-                preds = preds[0]
-            preds = np.where(preds != -100, preds, tokenizer.pad_token_id)
-            labels = np.where(labels != -100, labels, tokenizer.pad_token_id)
-            decoded_preds = tokenizer.batch_decode(preds, skip_special_tokens=True)
-            decoded_labels = tokenizer.batch_decode(labels, skip_special_tokens=True)
-            result = rouge_metric.compute(predictions=decoded_preds, references=decoded_labels, use_stemmer=True)
-            result = {key: round(value * 100, 4) for key, value in result.items()}
-            return result
-    elif task == "text_generation":
-        def compute_metrics(eval_preds):
-            return {}
-    elif task == "nlu":
         nlu_metric = evaluate.load("accuracy")
         def compute_metrics(eval_preds):
             preds, labels = eval_preds
@@ -233,7 +262,18 @@ def main():
             decoded_labels = [label.strip() for label in decoded_labels]
             result = nlu_metric.compute(predictions=decoded_preds, references=decoded_labels)
             return result
+
     elif task == "qa":
+        def preprocess_function(batch):
+            # QA 태스크의 경우, 질문(question)에 prefix를 추가
+            inputs = tokenizer([args.source_prefix + question for question in batch["question"]],
+                            batch["context"], truncation=True)
+            answers = [ans[0] if len(ans) > 0 else "" for ans in batch["answers"]["text"]]
+            with tokenizer.as_target_tokenizer():
+                labels = tokenizer(answers, truncation=True)
+            inputs["labels"] = labels["input_ids"]
+            return inputs
+
         qa_metric = evaluate.load("squad")
         def compute_metrics(eval_preds):
             preds, labels = eval_preds
@@ -244,6 +284,18 @@ def main():
             decoded_labels = tokenizer.batch_decode(labels, skip_special_tokens=True)
             result = qa_metric.compute(predictions=decoded_preds, references=decoded_labels)
             return result
+
+    else:
+        raise ValueError(f"Unsupported task: {task}")
+
+    # remove_columns는 train split의 컬럼 이름 사용
+    tokenized_dataset = dataset.map(preprocess_function, batched=True, remove_columns=dataset["train"].column_names)
+    
+    # ------------------------------
+    # 5. Data Collator
+    # ------------------------------
+    data_collator = DataCollatorForSeq2Seq(tokenizer=tokenizer, model=model)
+
 
     # ------------------------------
     # 7. Training Arguments 설정
@@ -258,10 +310,10 @@ def main():
         per_device_train_batch_size=args.per_device_train_batch_size,
         per_device_eval_batch_size=args.per_device_eval_batch_size,
         num_train_epochs=args.num_train_epochs,
-        weight_decay=0.01,
+        weight_decay=0.1,
         logging_steps=args.logging_steps,
         save_steps=args.save_steps,
-        predict_with_generate=True,
+        predict_with_generate=False,
         report_to=["wandb"],
         run_name=args.run_name,
         seed=args.seed,
@@ -271,6 +323,14 @@ def main():
         fp16=args.fp16,
         save_total_limit=3,
     )
+
+    # Generation 인자 딕셔너리 생성
+    generation_kwargs = {
+        "min_length": args.gen_min_length,
+        "max_length": args.gen_max_length,
+        "no_repeat_ngram_size": args.gen_no_repeat_ngram_size,
+        "num_beams": args.gen_num_beams,
+    }
 
     # ------------------------------
     # 8. Trainer 설정
@@ -285,8 +345,7 @@ def main():
         compute_metrics=compute_metrics,
     )
     
-    trainer.add_callback(TestEvaluationCallback(tokenized_dataset["test"], compute_metrics, tokenizer, task))
-
+    trainer.add_callback(TestEvaluationCallback(tokenized_dataset["test"], compute_metrics, tokenizer, task, generation_kwargs))
 
     # ------------------------------
     # 9. 모델 학습 및 평가
@@ -294,8 +353,8 @@ def main():
     trainer.train()
     trainer.save_model(output_dir)
     
-    # 테스트셋 평가 및 예측/정답 디코딩
-    test_results = trainer.predict(tokenized_dataset["test"])
+    # 테스트셋 평가 및 예측/정답 디코딩 (Generation 인자 적용)
+    test_results = trainer.predict(tokenized_dataset["test"], **generation_kwargs)
     predictions = test_results.predictions
     labels = test_results.label_ids
 
@@ -308,6 +367,9 @@ def main():
         decoded_preds = tokenizer.batch_decode(predictions, skip_special_tokens=True)
         decoded_labels = tokenizer.batch_decode(labels, skip_special_tokens=True)
 
+    # Postprocessing 후 평가 (예: 문장 단위 줄바꿈 적용)
+    decoded_preds, decoded_labels, _, _ = postprocess_text(decoded_preds, decoded_labels)
+    
     # 최종 평가 지표 계산
     if task == "text_generation":
         final_metrics = {}
