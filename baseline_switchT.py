@@ -319,6 +319,7 @@ def main():
         seed=args.seed,
         fp16=args.fp16,
         save_total_limit=3,
+        eval_accumulation_steps=2 
     )
 
     # Generation 인자 딕셔너리 생성

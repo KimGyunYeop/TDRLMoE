@@ -401,6 +401,7 @@ def main():
         seed=args.seed,
         fp16=args.fp16,
         save_total_limit=1,
+        eval_accumulation_steps=2  # 이 값을 조정하면서 GPU 메모리 사용량을 관리해보세요.
     )
 
     # Generation 인자 딕셔너리 생성
