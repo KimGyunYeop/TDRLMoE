@@ -313,13 +313,12 @@ def main():
         weight_decay=0.1,
         logging_steps=args.logging_steps,
         save_steps=args.save_steps,
-        predict_with_generate=False,
+        predict_with_generate=True,
         report_to=["wandb"],
         run_name=args.run_name,
         seed=args.seed,
         fp16=args.fp16,
         save_total_limit=3,
-        eval_accumulation_steps=50
     )
 
     # Generation 인자 딕셔너리 생성
