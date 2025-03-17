@@ -317,9 +317,6 @@ def main():
         report_to=["wandb"],
         run_name=args.run_name,
         seed=args.seed,
-        adam_beta1=0.9,
-        adam_beta2=0.999,
-        adam_epsilon=1e-08,
         fp16=args.fp16,
         save_total_limit=3,
     )
