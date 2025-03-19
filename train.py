@@ -71,18 +71,18 @@ class TestEvaluationCallback(TrainerCallback):
         self.trainer = None
         self.generation_kwargs = generation_kwargs
 
-    def on_train_begin(self, args, state, control, **kwargs):
-        # trainer 인스턴스를 저장합니다.
-        self.trainer = kwargs.get("trainer", None)
+    # def on_train_begin(self, args, state, control, **kwargs):
+    #     # trainer 인스턴스를 저장합니다.
+    #     self.trainer = kwargs.get("trainer", None)
 
     def on_epoch_end(self, args, state, control, **kwargs):
         # 5 에폭마다 평가 수행
         if int(state.epoch) % 5 != 0:
             return control
 
-        if self.trainer is None:
-            print("Trainer is not set in callback.")
-            return control
+        # if self.trainer is None:
+        #     print("Trainer is not set in callback.")
+        #     return control
 
         # predict 호출 시 generation 인자 전달
         test_results = self.trainer.predict(self.test_dataset, **self.generation_kwargs)
@@ -269,18 +269,18 @@ def main():
         def preprocess_function(batch):
             # 예: samsum, xsum, cnn_dailymail 등
             if "dialogue" in batch and "summary" in batch:
-                inputs = tokenizer([args.source_prefix + dialogue for dialogue in batch["dialogue"]], truncation=True, max_length=tokenizer.config.model_max_length)
+                inputs = tokenizer([args.source_prefix + dialogue for dialogue in batch["dialogue"]], truncation=True)
                 with tokenizer.as_target_tokenizer():
-                    labels = tokenizer(batch["summary"], truncation=True, max_length=tokenizer.config.model_max_length)
+                    labels = tokenizer(batch["summary"], truncation=True)
             elif "document" in batch and "summary" in batch:
-                inputs = tokenizer([args.source_prefix + doc for doc in batch["document"]], truncation=True, max_length=tokenizer.config.model_max_length)
+                inputs = tokenizer([args.source_prefix + doc for doc in batch["document"]], truncation=True)
                 with tokenizer.as_target_tokenizer():
-                    labels = tokenizer(batch["summary"], truncation=True, max_length=tokenizer.config.model_max_length)
+                    labels = tokenizer(batch["summary"], truncation=True)
             else:
                 # 예: XSum는 "article"과 "highlights" 사용
-                inputs = tokenizer([args.source_prefix + article for article in batch["article"]], truncation=True, max_length=tokenizer.config.model_max_length)
+                inputs = tokenizer([args.source_prefix + article for article in batch["article"]], truncation=True)
                 with tokenizer.as_target_tokenizer():
-                    labels = tokenizer(batch["highlights"], truncation=True, max_length=tokenizer.config.model_max_length)
+                    labels = tokenizer(batch["highlights"], truncation=True)
             inputs["labels"] = labels["input_ids"]
             return inputs
 
@@ -303,9 +303,9 @@ def main():
         def preprocess_function(batch):
             # 텍스트 생성 태스크의 경우, prefix가 있으면 입력 앞에 추가
             if args.source_prefix:
-                inputs = tokenizer([args.source_prefix + text for text in batch["text"]], truncation=True, max_length=tokenizer.config.model_max_length)
+                inputs = tokenizer([args.source_prefix + text for text in batch["text"]], truncation=True)
             else:
-                inputs = tokenizer(batch["text"], truncation=True, max_length=tokenizer.config.model_max_length)
+                inputs = tokenizer(batch["text"], truncation=True)
             inputs["labels"] = inputs["input_ids"].copy()
             return inputs
         def compute_metrics(eval_preds):
@@ -315,19 +315,19 @@ def main():
         def preprocess_function(batch):
             # NLU 태스크의 경우, 예시로 sentence1에 prefix를 붙임 (필요에 따라 조정 가능)
             if "sentence1" in batch and "sentence2" in batch:
-                inputs = tokenizer([args.source_prefix + s for s in batch["sentence1"]], batch["sentence2"], truncation=True, max_length=tokenizer.config.model_max_length)
+                inputs = tokenizer([args.source_prefix + s for s in batch["sentence1"]], batch["sentence2"], truncation=True)
             elif "premise" in batch and "hypothesis" in batch:
-                inputs = tokenizer([args.source_prefix + p for p in batch["premise"]], batch["hypothesis"], truncation=True, max_length=tokenizer.config.model_max_length)
+                inputs = tokenizer([args.source_prefix + p for p in batch["premise"]], batch["hypothesis"], truncation=True)
             elif "sentence" in batch:
-                inputs = tokenizer([args.source_prefix + s for s in batch["sentence"]], truncation=True, max_length=tokenizer.config.model_max_length)
+                inputs = tokenizer([args.source_prefix + s for s in batch["sentence"]], truncation=True)
             elif "text" in batch:
-                inputs = tokenizer([args.source_prefix + t for t in batch["text"]], truncation=True, max_length=tokenizer.config.model_max_length)
+                inputs = tokenizer([args.source_prefix + t for t in batch["text"]], truncation=True)
             else:
-                inputs = tokenizer(batch[list(batch.keys())[0]], truncation=True, max_length=tokenizer.config.model_max_length)
+                inputs = tokenizer(batch[list(batch.keys())[0]], truncation=True)
             if "label" in batch:
                 labels = [str(l) for l in batch["label"]]
                 with tokenizer.as_target_tokenizer():
-                    labels = tokenizer(labels, truncation=True, max_length=tokenizer.config.model_max_length)
+                    labels = tokenizer(labels, truncation=True)
                 inputs["labels"] = labels["input_ids"]
             else:
                 inputs["labels"] = None
@@ -347,15 +347,22 @@ def main():
             return result
 
     elif task == "qa":
-        def preprocess_function(batch):
-            # QA 태스크의 경우, 질문(question)에 prefix를 추가
-            inputs = tokenizer([args.source_prefix + question for question in batch["question"]],
-                            batch["context"], truncation=True, max_length=tokenizer.config.model_max_length)
-            answers = [ans[0] if len(ans) > 0 else "" for ans in batch["answers"]["text"]]
+        # 전처리 함수: 질문과 문맥을 결합하여 T5의 입력 형식으로 변환하고, 첫 번째 정답을 타깃으로 사용합니다.
+        def preprocess_function(examples):
+            # T5는 text-to-text 모델이므로, 입력 텍스트에 질문과 문맥을 함께 넣어줍니다.
+            inputs = ["question: " + q + " context: " + c for q, c in zip(examples["question"], examples["context"])]
+            # print(inputs)
+            # SQuAD의 answers는 리스트 형태이므로 첫 번째 정답을 선택합니다.
+            targets = [ans["text"][0] if len(ans["text"]) > 0 else "" for ans in examples["answers"]]
+            # print(targets)
+            
+            # 입력과 타깃 토크나이징 (max_length, truncation 등 필요에 따라 조정)
+            model_inputs = tokenizer(inputs, truncation=True)
             with tokenizer.as_target_tokenizer():
-                labels = tokenizer(answers, truncation=True, max_length=tokenizer.config.model_max_length)
-            inputs["labels"] = labels["input_ids"]
-            return inputs
+                labels = tokenizer(targets, truncation=True)
+            
+            model_inputs["labels"] = labels["input_ids"]
+            return model_inputs
 
         qa_metric = evaluate.load("squad")
         def compute_metrics(eval_preds):
@@ -420,8 +427,10 @@ def main():
         data_collator=data_collator,
         compute_metrics=compute_metrics,
     )
-    # Callback에 generation 인자 전달
-    trainer.add_callback(TestEvaluationCallback(tokenized_dataset["test"], compute_metrics, tokenizer, task, generation_kwargs))
+    test_callback = TestEvaluationCallback(tokenized_dataset["test"], compute_metrics, tokenizer, task, generation_kwargs)
+    test_callback.trainer = trainer  # trainer 인스턴스를 직접 할당
+    trainer.add_callback(test_callback)
+
 
     # ---------------------------------------------------------
     # 모델 학습 및 평가
