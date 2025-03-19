@@ -269,18 +269,18 @@ def main():
         def preprocess_function(batch):
             # 예: samsum, xsum, cnn_dailymail 등
             if "dialogue" in batch and "summary" in batch:
-                inputs = tokenizer([args.source_prefix + dialogue for dialogue in batch["dialogue"]], truncation=True)
+                inputs = tokenizer([args.source_prefix + dialogue for dialogue in batch["dialogue"]], truncation=True, max_length=tokenizer.config.model_max_length)
                 with tokenizer.as_target_tokenizer():
-                    labels = tokenizer(batch["summary"], truncation=True)
+                    labels = tokenizer(batch["summary"], truncation=True, max_length=tokenizer.config.model_max_length)
             elif "document" in batch and "summary" in batch:
-                inputs = tokenizer([args.source_prefix + doc for doc in batch["document"]], truncation=True)
+                inputs = tokenizer([args.source_prefix + doc for doc in batch["document"]], truncation=True, max_length=tokenizer.config.model_max_length)
                 with tokenizer.as_target_tokenizer():
-                    labels = tokenizer(batch["summary"], truncation=True)
+                    labels = tokenizer(batch["summary"], truncation=True, max_length=tokenizer.config.model_max_length)
             else:
                 # 예: XSum는 "article"과 "highlights" 사용
-                inputs = tokenizer([args.source_prefix + article for article in batch["article"]], truncation=True)
+                inputs = tokenizer([args.source_prefix + article for article in batch["article"]], truncation=True, max_length=tokenizer.config.model_max_length)
                 with tokenizer.as_target_tokenizer():
-                    labels = tokenizer(batch["highlights"], truncation=True)
+                    labels = tokenizer(batch["highlights"], truncation=True, max_length=tokenizer.config.model_max_length)
             inputs["labels"] = labels["input_ids"]
             return inputs
 
@@ -303,9 +303,9 @@ def main():
         def preprocess_function(batch):
             # 텍스트 생성 태스크의 경우, prefix가 있으면 입력 앞에 추가
             if args.source_prefix:
-                inputs = tokenizer([args.source_prefix + text for text in batch["text"]], truncation=True)
+                inputs = tokenizer([args.source_prefix + text for text in batch["text"]], truncation=True, max_length=tokenizer.config.model_max_length)
             else:
-                inputs = tokenizer(batch["text"], truncation=True)
+                inputs = tokenizer(batch["text"], truncation=True, max_length=tokenizer.config.model_max_length)
             inputs["labels"] = inputs["input_ids"].copy()
             return inputs
         def compute_metrics(eval_preds):
@@ -315,19 +315,19 @@ def main():
         def preprocess_function(batch):
             # NLU 태스크의 경우, 예시로 sentence1에 prefix를 붙임 (필요에 따라 조정 가능)
             if "sentence1" in batch and "sentence2" in batch:
-                inputs = tokenizer([args.source_prefix + s for s in batch["sentence1"]], batch["sentence2"], truncation=True)
+                inputs = tokenizer([args.source_prefix + s for s in batch["sentence1"]], batch["sentence2"], truncation=True, max_length=tokenizer.config.model_max_length)
             elif "premise" in batch and "hypothesis" in batch:
-                inputs = tokenizer([args.source_prefix + p for p in batch["premise"]], batch["hypothesis"], truncation=True)
+                inputs = tokenizer([args.source_prefix + p for p in batch["premise"]], batch["hypothesis"], truncation=True, max_length=tokenizer.config.model_max_length)
             elif "sentence" in batch:
-                inputs = tokenizer([args.source_prefix + s for s in batch["sentence"]], truncation=True)
+                inputs = tokenizer([args.source_prefix + s for s in batch["sentence"]], truncation=True, max_length=tokenizer.config.model_max_length)
             elif "text" in batch:
-                inputs = tokenizer([args.source_prefix + t for t in batch["text"]], truncation=True)
+                inputs = tokenizer([args.source_prefix + t for t in batch["text"]], truncation=True, max_length=tokenizer.config.model_max_length)
             else:
-                inputs = tokenizer(batch[list(batch.keys())[0]], truncation=True)
+                inputs = tokenizer(batch[list(batch.keys())[0]], truncation=True, max_length=tokenizer.config.model_max_length)
             if "label" in batch:
                 labels = [str(l) for l in batch["label"]]
                 with tokenizer.as_target_tokenizer():
-                    labels = tokenizer(labels, truncation=True)
+                    labels = tokenizer(labels, truncation=True, max_length=tokenizer.config.model_max_length)
                 inputs["labels"] = labels["input_ids"]
             else:
                 inputs["labels"] = None
@@ -350,10 +350,10 @@ def main():
         def preprocess_function(batch):
             # QA 태스크의 경우, 질문(question)에 prefix를 추가
             inputs = tokenizer([args.source_prefix + question for question in batch["question"]],
-                            batch["context"], truncation=True)
+                            batch["context"], truncation=True, max_length=tokenizer.config.model_max_length)
             answers = [ans[0] if len(ans) > 0 else "" for ans in batch["answers"]["text"]]
             with tokenizer.as_target_tokenizer():
-                labels = tokenizer(answers, truncation=True)
+                labels = tokenizer(answers, truncation=True, max_length=tokenizer.config.model_max_length)
             inputs["labels"] = labels["input_ids"]
             return inputs
 
