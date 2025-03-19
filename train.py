@@ -214,7 +214,7 @@ def main():
     elif args.dataset_name == "openwebtext":
         dataset = load_dataset("openwebtext")
     elif args.dataset_name in ["wikitext-2", "wikitext-103"]:
-        dataset = load_dataset(args.dataset_name)
+        dataset = load_dataset("Salesforce/wikitext", name=args.dataset_name+"-raw-v1")
     elif args.dataset_name == "glue":
         task_name = args.nlu_task if args.nlu_task is not None else "sst2"
         dataset = load_dataset("glue", task_name)
