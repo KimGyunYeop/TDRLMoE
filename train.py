@@ -410,6 +410,9 @@ def main():
 
     data_collator = DataCollatorForSeq2Seq(tokenizer=tokenizer, model=model)
     
+    if "test" not in tokenized_dataset.keys():
+        tokenized_dataset["test"] = tokenized_dataset["validation"]
+        
     # ---------------------------------------------------------
     # 1에폭에 두 번씩 eval 수행하도록 eval_steps 설정
     # ---------------------------------------------------------
