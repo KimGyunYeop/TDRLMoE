@@ -242,9 +242,9 @@ def main():
         dataset = load_dataset("cnn_dailymail", "3.0.0")
     elif "wmt19" in args.dataset_name:
         try:
-            dataset = load_dataset("wmt/wmt19", "-".join([args.dataset_name.split('_')[1],args.dataset_name.split('_')[2]], trust_remote_code=True))
+            dataset = load_dataset("wmt/wmt19", "-".join([args.dataset_name.split('_')[1],args.dataset_name.split('_')[2]]), trust_remote_code=True)
         except:
-            dataset = load_dataset("wmt/wmt19", "-".join([args.dataset_name.split('_')[2],args.dataset_name.split('_')[1]], trust_remote_code=True))
+            dataset = load_dataset("wmt/wmt19", "-".join([args.dataset_name.split('_')[2],args.dataset_name.split('_')[1]]), trust_remote_code=True)
     else:
         raise ValueError(f"Unsupported dataset: {args.dataset_name}")
     print(dataset)
