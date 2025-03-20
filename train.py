@@ -117,14 +117,14 @@ class RLActivationCallback(TrainerCallback):
     def __init__(self, do_RL, RL_start_epoch):
         self.do_RL = do_RL
         self.RL_start_epoch = RL_start_epoch
-        
+
     def on_epoch_begin(self, args, state, control, **kwargs):
-        # 모델은 kwargs 또는 self.trainer를 통해 접근 가능
+        # 모델 인스턴스 가져오기 (kwargs 또는 self.trainer에서)
         model = kwargs.get("model")
         if model is None and hasattr(self, "trainer"):
             model = self.trainer.model
-        if args.do_RL:
-            if state.epoch >= args.RL_start_epoch:
+        if self.do_RL:
+            if state.epoch >= self.RL_start_epoch:
                 model.config.do_RL = True
                 print(f"Epoch {state.epoch:.2f}: RL 활성화 (do_RL=True)")
             else:
