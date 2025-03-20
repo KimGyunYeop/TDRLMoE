@@ -63,13 +63,14 @@ class CustomSeq2SeqTrainer(Seq2SeqTrainer):
 # TestEvaluationCallback 수정 (5 에폭마다 평가 및 generation 인자 전달, postprocessing 적용)
 # ---------------------------------------------------------
 class TestEvaluationCallback(TrainerCallback):
-    def __init__(self, test_dataset, compute_metrics, tokenizer, task, generation_kwargs):
+    def __init__(self, test_dataset, compute_metrics, tokenizer, task, generation_kwargs, output_dir="results"):
         self.test_dataset = test_dataset
         self.compute_metrics = compute_metrics
         self.tokenizer = tokenizer
         self.task = task
         self.trainer = None
         self.generation_kwargs = generation_kwargs
+        self.output_dir = output_dir
 
     def on_train_begin(self, args, state, control, **kwargs):
         print("--epoch--", state.epoch)
@@ -103,10 +104,23 @@ class TestEvaluationCallback(TrainerCallback):
             decoded_labels = self.tokenizer.batch_decode(labels, skip_special_tokens=True)
         
         if self.task == "text_generation":
-            test_metrics = {}
+            eval_loss = test_results.metrics.get("eval_loss")
+            perplexity = math.exp(eval_loss) if eval_loss is not None else None
+            test_metrics = {"perplexity": perplexity}
         else:
             test_metrics = self.compute_metrics((predictions, labels))
         
+        sample_list = []
+        for pred, gold in zip(decoded_preds, decoded_labels):
+            sample_list.append({"prediction": pred, "gold": gold})
+        with open(os.path.join(self.output_dir, f"pred_gold_samples_epoch{state.epoch}.json"), "w", encoding="utf-8") as f:
+            json.dump(sample_list, f, indent=4, ensure_ascii=False)
+            
+        results_file = os.path.join(self.output_dir, f"{state.epoch}_switch_results.json")
+        with open(results_file, "w") as f:
+            json.dump({k: round(v, 4) for k, v in test_metrics.items()}, f, indent=4)
+        print("Model and results saved.")
+            
         print(f"Test metrics at epoch {state.epoch}: {test_metrics}")
         wandb.log({f"test_{k}": v for k, v in test_metrics.items()})
         return control
@@ -499,39 +513,39 @@ def main():
     trainer.train()
     trainer.save_model(output_dir)
     
-    # 최종 테스트 예측 시 generation 인자 전달
-    test_results = trainer.predict(tokenized_dataset["test"], **generation_kwargs)
-    predictions = test_results.predictions
-    labels = test_results.label_ids
+    # # 최종 테스트 예측 시 generation 인자 전달
+    # test_results = trainer.predict(tokenized_dataset["test"], **generation_kwargs)
+    # predictions = test_results.predictions
+    # labels = test_results.label_ids
 
-    if task in ["summarization", "qa", "nlu", "translation"]:
-        preds = np.where(predictions != -100, predictions, tokenizer.pad_token_id)
-        labels = np.where(labels != -100, labels, tokenizer.pad_token_id)
-        decoded_preds = tokenizer.batch_decode(preds, skip_special_tokens=True)
-        decoded_labels = tokenizer.batch_decode(labels, skip_special_tokens=True)
-        # postprocessing 적용: 문장 단위 줄바꿈
-        decoded_preds, decoded_labels, _, _ = postprocess_text(decoded_preds, decoded_labels)
-    elif task in ["text_generation"]:
-        decoded_preds = tokenizer.batch_decode(predictions, skip_special_tokens=True)
-        decoded_labels = tokenizer.batch_decode(labels, skip_special_tokens=True)
+    # if task in ["summarization", "qa", "nlu", "translation"]:
+    #     preds = np.where(predictions != -100, predictions, tokenizer.pad_token_id)
+    #     labels = np.where(labels != -100, labels, tokenizer.pad_token_id)
+    #     decoded_preds = tokenizer.batch_decode(preds, skip_special_tokens=True)
+    #     decoded_labels = tokenizer.batch_decode(labels, skip_special_tokens=True)
+    #     # postprocessing 적용: 문장 단위 줄바꿈
+    #     decoded_preds, decoded_labels, _, _ = postprocess_text(decoded_preds, decoded_labels)
+    # elif task in ["text_generation"]:
+    #     decoded_preds = tokenizer.batch_decode(predictions, skip_special_tokens=True)
+    #     decoded_labels = tokenizer.batch_decode(labels, skip_special_tokens=True)
 
-    if task == "text_generation":
-        eval_loss = test_results.metrics.get("eval_loss")
-        perplexity = math.exp(eval_loss) if eval_loss is not None else None
-        final_metrics = {"perplexity": perplexity}
-    else:
-        final_metrics = compute_metrics((predictions, labels))
+    # if task == "text_generation":
+    #     eval_loss = test_results.metrics.get("eval_loss")
+    #     perplexity = math.exp(eval_loss) if eval_loss is not None else None
+    #     final_metrics = {"perplexity": perplexity}
+    # else:
+    #     final_metrics = compute_metrics((predictions, labels))
     
-    sample_list = []
-    for pred, gold in zip(decoded_preds, decoded_labels):
-        sample_list.append({"prediction": pred, "gold": gold})
-    with open(os.path.join(output_dir, "pred_gold_samples.json"), "w", encoding="utf-8") as f:
-        json.dump(sample_list, f, indent=4, ensure_ascii=False)
+    # sample_list = []
+    # for pred, gold in zip(decoded_preds, decoded_labels):
+    #     sample_list.append({"prediction": pred, "gold": gold})
+    # with open(os.path.join(output_dir, "pred_gold_samples.json"), "w", encoding="utf-8") as f:
+    #     json.dump(sample_list, f, indent=4, ensure_ascii=False)
     
-    results_file = os.path.join(output_dir, f"{task}_switch_results.json")
-    with open(results_file, "w") as f:
-        json.dump({k: round(v, 4) for k, v in final_metrics.items()}, f, indent=4)
-    print("Model and results saved.")
+    # results_file = os.path.join(output_dir, f"{task}_switch_results.json")
+    # with open(results_file, "w") as f:
+    #     json.dump({k: round(v, 4) for k, v in final_metrics.items()}, f, indent=4)
+    # print("Model and results saved.")
 
 if __name__ == "__main__":
     main()
