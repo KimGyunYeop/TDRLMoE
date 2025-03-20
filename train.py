@@ -127,11 +127,11 @@ class RLActivationCallback(TrainerCallback):
             if state.epoch >= self.RL_start_epoch:
                 model.config.do_RL = True
                 model.do_RL = True
-                print(f"Epoch {state.epoch:.2f}: RL 활성화 (do_RL={model.config.do_RL})")
+                print(f"Epoch {state.epoch:.2f}: RL 활성화 (config.do_RL={model.config.do_RL}, do_RL={model.do_RL})")
             else:
                 model.config.do_RL = False
                 model.do_RL = False
-                print(f"Epoch {state.epoch:.2f}: RL 비활성화 (do_RL={model.config.do_RL})")
+                print(f"Epoch {state.epoch:.2f}: RL 비활성화 (do_RL={model.config.do_RL}, do_RL={model.do_RL})")
         return control
     
 # ---------------------------------------------------------
