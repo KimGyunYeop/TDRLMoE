@@ -423,7 +423,7 @@ def main():
         raise ValueError(f"Unsupported task: {task}")
 
     # Map 전처리 함수 (각 split에 대해)
-    tokenized_dataset = dataset.map(preprocess_function, batched=True, remove_columns=dataset["train"].column_names)
+    tokenized_dataset = dataset.map(preprocess_function, batched=True, remove_columns=dataset["train"].column_names, num_proc=8)
 
     data_collator = DataCollatorForSeq2Seq(tokenizer=tokenizer, model=model)
     
