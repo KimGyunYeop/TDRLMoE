@@ -89,7 +89,7 @@ class TestEvaluationCallback(TrainerCallback):
         predictions = test_results.predictions
         labels = test_results.label_ids
 
-        if self.task in ["summarization", "qa", "nlu"]:
+        if self.task in ["summarization", "qa", "nlu", "translation"]:
             preds = np.where(predictions != -100, predictions, self.tokenizer.pad_token_id)
             labels = np.where(labels != -100, labels, self.tokenizer.pad_token_id)
             decoded_preds = self.tokenizer.batch_decode(preds, skip_special_tokens=True)
@@ -172,9 +172,11 @@ def main():
     elif args.dataset_name == "squad_v1":
         task = "qa"
         default_prefix = "question: "  # 질문에 대한 prefix 부여
-    # elif "wmt" in args.dataset_name:
-    #     task = "translation"
-    #     default_prefix = f"translate {args.dataset_name.split("_")[1]} to {args.dataset_name.split("_")[2]}: "  # 번역에 대한 prefix 부여
+    elif "wmt" in args.dataset_name:
+        if len(args.dataset_name.split("_")) != 3:
+            raise ValueError("WMT datasets should be in the format 'wmt19_xx_xx'")
+        task = "translation"
+        default_prefix = f"translate {args.dataset_name.split("_")[1]} to {args.dataset_name.split("_")[2]}: "  # 번역에 대한 prefix 부여
     else:
         raise ValueError(f"Unsupported dataset: {args.dataset_name}")
 
@@ -223,7 +225,10 @@ def main():
     elif args.dataset_name == "cnn_dailymail":
         dataset = load_dataset("cnn_dailymail", "3.0.0")
     elif "wmt19" in args.dataset_name:
-        raise NotImplementedError("WMT19 datasets are not supported yet.")
+        try:
+            dataset = load_dataset("wmt/wmt19", "-".join([args.dataset_name.split("_")[1],args.dataset_name.split("_")[2]], trust_remote_code=True))
+        except:
+            dataset = load_dataset("wmt/wmt19", "-".join([args.dataset_name.split("_")[2],args.dataset_name.split("_")[1]], trust_remote_code=True))
     else:
         raise ValueError(f"Unsupported dataset: {args.dataset_name}")
     print(dataset)
@@ -371,7 +376,32 @@ def main():
             decoded_labels = tokenizer.batch_decode(labels, skip_special_tokens=True)
             result = qa_metric.compute(predictions=decoded_preds, references=decoded_labels)
             return result
+    elif task == "translation":
+        def preprocess_function(batch):
+            src_lang = args.dataset_name.split("_")[1]
+            tgt_lang = args.dataset_name.split("_")[2]
+            inputs = [args.source_prefix + t[src_lang] for t in batch["translation"]]
+            targets = [t[tgt_lang] for t in batch["translation"]]
+            model_inputs = tokenizer(inputs, truncation=True)
+            with tokenizer.as_target_tokenizer():
+                labels = tokenizer(targets, truncation=True)
+            model_inputs["labels"] = labels["input_ids"]
+            return model_inputs
 
+        translation_metric = evaluate.load("sacrebleu")
+        def compute_metrics(eval_preds):
+            preds, labels = eval_preds
+            if isinstance(preds, tuple):
+                preds = preds[0]
+            preds = np.where(preds != -100, preds, tokenizer.pad_token_id)
+            labels = np.where(labels != -100, labels, tokenizer.pad_token_id)
+            decoded_preds = tokenizer.batch_decode(preds, skip_special_tokens=True)
+            decoded_labels = tokenizer.batch_decode(labels, skip_special_tokens=True)
+            # sacreBLEU은 각 참조 문장을 리스트로 감싸야 합니다.
+            decoded_labels = [[label] for label in decoded_labels]
+            result = translation_metric.compute(predictions=decoded_preds, references=decoded_labels)
+            result = {"bleu": round(result["score"], 4)}
+            return result
     else:
         raise ValueError(f"Unsupported task: {task}")
 
@@ -440,7 +470,7 @@ def main():
     predictions = test_results.predictions
     labels = test_results.label_ids
 
-    if task in ["summarization", "qa", "nlu"]:
+    if task in ["summarization", "qa", "nlu", "translation"]:
         preds = np.where(predictions != -100, predictions, tokenizer.pad_token_id)
         labels = np.where(labels != -100, labels, tokenizer.pad_token_id)
         decoded_preds = tokenizer.batch_decode(preds, skip_special_tokens=True)
