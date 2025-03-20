@@ -15,6 +15,7 @@ from transformers import (
 from base_Switch_Transformer import SwitchTransformersForConditionalGeneration
 import os
 import torch
+import math
 
 # nltk 문장 토크나이저가 없으면 다운로드
 try:
@@ -58,7 +59,7 @@ class TestEvaluationCallback(TrainerCallback):
         #     print("Trainer is not set in callback.")
         #     return control
 
-        # predict 호출 시 생성 인자 전달
+        # predict 호출 시 generation 인자 전달
         test_results = self.trainer.predict(self.test_dataset, **self.generation_kwargs)
         predictions = test_results.predictions
         labels = test_results.label_ids
@@ -68,19 +69,34 @@ class TestEvaluationCallback(TrainerCallback):
             labels = np.where(labels != -100, labels, self.tokenizer.pad_token_id)
             decoded_preds = self.tokenizer.batch_decode(preds, skip_special_tokens=True)
             decoded_labels = self.tokenizer.batch_decode(labels, skip_special_tokens=True)
+            # postprocessing: 문장 단위 줄바꿈 적용
+            decoded_preds, decoded_labels, _, _ = postprocess_text(decoded_preds, decoded_labels)
         elif self.task == "text_generation":
             decoded_preds = self.tokenizer.batch_decode(predictions, skip_special_tokens=True)
             decoded_labels = self.tokenizer.batch_decode(labels, skip_special_tokens=True)
         
-        if self.task != "text_generation":
-            test_metrics = self.compute_metrics((predictions, labels))
+        if self.task == "text_generation":
+            eval_loss = test_results.metrics.get("eval_loss")
+            perplexity = math.exp(eval_loss) if eval_loss is not None else None
+            test_metrics = {"perplexity": perplexity}
         else:
-            test_metrics = {}
+            test_metrics = self.compute_metrics((predictions, labels))
         
+        sample_list = []
+        for pred, gold in zip(decoded_preds, decoded_labels):
+            sample_list.append({"prediction": pred, "gold": gold})
+        with open(os.path.join(self.output_dir, f"pred_gold_samples_epoch{state.epoch}.json"), "w", encoding="utf-8") as f:
+            json.dump(sample_list, f, indent=4, ensure_ascii=False)
+            
+        results_file = os.path.join(self.output_dir, f"{state.epoch}_switch_results.json")
+        with open(results_file, "w") as f:
+            json.dump({k: round(v, 4) for k, v in test_metrics.items()}, f, indent=4)
+        print("Model and results saved.")
+            
         print(f"Test metrics at epoch {state.epoch}: {test_metrics}")
         wandb.log({f"test_{k}": v for k, v in test_metrics.items()})
         return control
-
+    
 def parse_args():
     parser = argparse.ArgumentParser(
         description="Train baseline Switch Transformer on multiple tasks with Seq2SeqTrainer"
