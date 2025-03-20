@@ -138,7 +138,7 @@ def main():
     if not hasattr(args, "source_prefix") or args.source_prefix is None:
         args.source_prefix = default_prefix
 
-    exp_name = f"{args.dataset_name}-{args.model_name.replace('/', '-')}-{task}"
+    exp_name = f"{args.dataset_name}-{args.model_name.replace('/', '-')}-{task}-{args.num_train_epochs}epochs"
     output_dir = os.path.join("results", exp_name, args.run_name)
     os.makedirs(output_dir, exist_ok=True)
 
@@ -151,7 +151,7 @@ def main():
     # 2. 데이터셋 로드
     # ------------------------------
     if args.dataset_name == "samsum":
-        dataset = load_dataset("samsum")
+        dataset = load_dataset("samsum", trust_remote_code=True)
     elif args.dataset_name == "openwebtext":
         dataset = load_dataset("openwebtext")
     elif args.dataset_name in ["wikitext-2", "wikitext-103"]:

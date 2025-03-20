@@ -118,13 +118,10 @@ def parse_args():
     )
     parser.add_argument("--model_name", type=str, default="google/switch-base-16", help="HuggingFace model identifier")
     parser.add_argument("--dataset_name", type=str, 
-                        choices=["samsum", "openwebtext", "wikitext-2", "wikitext-103", "glue", "superglue", "squad_v1", "xsum", "cnn_dailymail"],
                         default="samsum", help="Dataset name to load")
     # NLU 전용: glue, superglue의 세부 태스크 이름 (없으면 기본값 사용)
     parser.add_argument("--nlu_task", type=str, default=None, help="For glue/superglue, specify task name (e.g., sst2 for glue, boolq for superglue)")
-    # 번역 태스크가 아닌 경우 필요없으나 이전 코드 유지 (wmt23 등)
-    parser.add_argument("--source_lang", type=str, default=None, help="Source language code (if needed)")
-    parser.add_argument("--target_lang", type=str, default=None, help="Target language code (if needed)")
+    
     parser.add_argument("--num_train_epochs", type=int, default=10, help="Number of training epochs")
     parser.add_argument("--learning_rate", type=float, default=5e-5, help="Learning rate")
     parser.add_argument("--per_device_train_batch_size", type=int, default=8, help="Batch size per device during training")
@@ -175,6 +172,9 @@ def main():
     elif args.dataset_name == "squad_v1":
         task = "qa"
         default_prefix = "question: "  # 질문에 대한 prefix 부여
+    # elif "wmt" in args.dataset_name:
+    #     task = "translation"
+    #     default_prefix = f"translate {args.dataset_name.split("_")[1]} to {args.dataset_name.split("_")[2]}: "  # 번역에 대한 prefix 부여
     else:
         raise ValueError(f"Unsupported dataset: {args.dataset_name}")
 
@@ -183,13 +183,8 @@ def main():
     if not hasattr(args, "source_prefix") or args.source_prefix is None:
         args.source_prefix = default_prefix
 
-    # 번역 태스크 관련 체크 (wmt23 등)
-    if task == "translation":
-        if args.source_lang is None or args.target_lang is None:
-            raise ValueError("For translation task, please specify both --source_lang and --target_lang.")
-
     EPOCH = 0
-    exp_name = f"{args.dataset_name}-{args.model_name.replace('/', '-')}-{task}"
+    exp_name = f"{args.dataset_name}-{args.model_name.replace('/', '-')}-{task}-{args.num_train_epochs}epochs"
     if args.do_RL:
         run_name_parts = ["RL", args.RL_sample_stretegy, f"exp{args.RL_expert_change_ratio}", f"num{args.RL_sample_num}",
                           f"coef{args.RL_loss_coef}", args.RL_base_logit_type, args.RL_reward_stretegy, f"startRL{args.RL_start_epoch}"]
@@ -210,7 +205,7 @@ def main():
     # 데이터셋 로드 (태스크별 분기)
     # ---------------------------------------------------------
     if args.dataset_name == "samsum":
-        dataset = load_dataset("samsum")
+        dataset = load_dataset("samsum", trust_remote_code=True)
     elif args.dataset_name == "openwebtext":
         dataset = load_dataset("openwebtext")
     elif args.dataset_name in ["wikitext-2", "wikitext-103"]:
@@ -227,6 +222,8 @@ def main():
         dataset = load_dataset("xsum", trust_remote_code=True)
     elif args.dataset_name == "cnn_dailymail":
         dataset = load_dataset("cnn_dailymail", "3.0.0")
+    elif "wmt19" in args.dataset_name:
+        raise NotImplementedError("WMT19 datasets are not supported yet.")
     else:
         raise ValueError(f"Unsupported dataset: {args.dataset_name}")
     print(dataset)
