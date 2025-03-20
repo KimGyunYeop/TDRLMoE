@@ -36,13 +36,14 @@ def postprocess_text(preds, labels):
     return preds, labels, str_preds, str_labels
 
 class TestEvaluationCallback(TrainerCallback):
-    def __init__(self, test_dataset, compute_metrics, tokenizer, task, generation_kwargs):
+    def __init__(self, test_dataset, compute_metrics, tokenizer, task, generation_kwargs, output_dir="results"):
         self.test_dataset = test_dataset
         self.compute_metrics = compute_metrics
         self.tokenizer = tokenizer
         self.task = task
         self.trainer = None
         self.generation_kwargs = generation_kwargs
+        self.output_dir = output_dir
 
     def on_train_begin(self, args, state, control, **kwargs):
         print("--epoch--", state.epoch)
@@ -423,7 +424,7 @@ def main():
         compute_metrics=compute_metrics,
     )
     
-    test_callback = TestEvaluationCallback(tokenized_dataset["test"], compute_metrics, tokenizer, task, generation_kwargs)
+    test_callback = TestEvaluationCallback(tokenized_dataset["test"], compute_metrics, tokenizer, task, generation_kwargs, output_dir)
     test_callback.trainer = trainer  # trainer 인스턴스를 직접 할당
     trainer.add_callback(test_callback)
 
