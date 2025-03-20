@@ -114,6 +114,10 @@ class TestEvaluationCallback(TrainerCallback):
 # RL Activation Callback: 각 에폭 시작 시 RL_start_epoch 기준으로 RL 활성화 여부 결정
 # ---------------------------------------------------------
 class RLActivationCallback(TrainerCallback):
+    def __init__(self, do_RL, RL_start_epoch):
+        self.do_RL = do_RL
+        self.RL_start_epoch = RL_start_epoch
+        
     def on_epoch_begin(self, args, state, control, **kwargs):
         # 모델은 kwargs 또는 self.trainer를 통해 접근 가능
         model = kwargs.get("model")
@@ -392,6 +396,7 @@ def main():
             if isinstance(preds, tuple):
                 preds = preds[0]
             preds = np.where(preds != -100, preds, tokenizer.pad_token_id)
+            labels = np.where(labels != -100, labels, tokenizer.pad_token_id)
             decoded_preds = tokenizer.batch_decode(preds, skip_special_tokens=True)
             decoded_labels = tokenizer.batch_decode(labels, skip_special_tokens=True)
             result = qa_metric.compute(predictions=decoded_preds, references=decoded_labels)
@@ -478,7 +483,7 @@ def main():
         compute_metrics=compute_metrics,
     )
     # RL 활성화 상태를 각 에폭 시작 시 업데이트하는 콜백 추가
-    trainer.add_callback(RLActivationCallback())
+    trainer.add_callback(RLActivationCallback(args.do_RL, args.RL_start_epoch))
     test_callback = TestEvaluationCallback(tokenized_dataset["test"], compute_metrics, tokenizer, task, generation_kwargs)
     test_callback.trainer = trainer  # trainer 인스턴스를 직접 할당
     trainer.add_callback(test_callback)
