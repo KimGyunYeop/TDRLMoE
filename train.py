@@ -176,7 +176,7 @@ def main():
         if len(args.dataset_name.split("_")) != 3:
             raise ValueError("WMT datasets should be in the format 'wmt19_xx_xx'")
         task = "translation"
-        default_prefix = f"translate {args.dataset_name.split("_")[1]} to {args.dataset_name.split("_")[2]}: "  # 번역에 대한 prefix 부여
+        default_prefix = f"translate {args.dataset_name.split('_')[1]} to {args.dataset_name.split('_')[2]}: "  # 번역에 대한 prefix 부여
     else:
         raise ValueError(f"Unsupported dataset: {args.dataset_name}")
 
