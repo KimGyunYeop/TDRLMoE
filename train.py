@@ -75,6 +75,9 @@ class TestEvaluationCallback(TrainerCallback):
         print("--epoch--", state.epoch)
 
     def on_epoch_end(self, args, state, control, **kwargs):
+        print("#" * 50)
+        print(f"Epoch {state.epoch} train end")
+        print("#" * 50)
         # 5 에폭마다 평가 수행
         if int(state.epoch) % 5 != 0:
             return control
