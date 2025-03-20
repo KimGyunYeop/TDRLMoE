@@ -126,9 +126,11 @@ class RLActivationCallback(TrainerCallback):
         if self.do_RL:
             if state.epoch >= self.RL_start_epoch:
                 model.config.do_RL = True
+                model.do_RL = True
                 print(f"Epoch {state.epoch:.2f}: RL 활성화 (do_RL={model.config.do_RL})")
             else:
                 model.config.do_RL = False
+                model.do_RL = False
                 print(f"Epoch {state.epoch:.2f}: RL 비활성화 (do_RL={model.config.do_RL})")
         return control
     
@@ -282,9 +284,11 @@ def main():
     # 초기 RL 상태는 RL_start_epoch에 따라 설정 (첫 에폭 시작 전 설정)
     if args.do_RL and 0 >= args.RL_start_epoch:
         model.config.do_RL = True
+        model.do_RL = True
         print("초기 RL 활성화")
     else:
         model.config.do_RL = False
+        model.do_RL = False
         print("초기 RL 비활성화")
 
     # ---------------------------------------------------------
