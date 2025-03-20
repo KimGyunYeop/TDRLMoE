@@ -330,7 +330,7 @@ def main():
         raise ValueError(f"Unsupported task: {task}")
 
     # remove_columns는 train split의 컬럼 이름 사용
-    tokenized_dataset = dataset.map(preprocess_function, batched=True, remove_columns=dataset["train"].column_namesm, num_proc=8)
+    tokenized_dataset = dataset.map(preprocess_function, batched=True, remove_columns=dataset["train"].column_names, num_proc=8)
     
     if "test" not in tokenized_dataset.keys():
         tokenized_dataset["test"] = tokenized_dataset["validation"]
