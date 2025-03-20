@@ -310,6 +310,16 @@ def main():
 
 
         qa_metric = evaluate.load("squad")
+        # def compute_metrics(eval_preds):
+        #     preds, labels = eval_preds
+        #     if isinstance(preds, tuple):
+        #         preds = preds[0]
+        #     preds = np.where(preds != -100, preds, tokenizer.pad_token_id)
+        #     labels = np.where(labels != -100, labels, tokenizer.pad_token_id)
+        #     decoded_preds = tokenizer.batch_decode(preds, skip_special_tokens=True)
+        #     decoded_labels = tokenizer.batch_decode(labels, skip_special_tokens=True)
+        #     result = qa_metric.compute(predictions=decoded_preds, references=decoded_labels)
+        #     return result
         def compute_metrics(eval_preds):
             preds, labels = eval_preds
             if isinstance(preds, tuple):
@@ -318,8 +328,15 @@ def main():
             labels = np.where(labels != -100, labels, tokenizer.pad_token_id)
             decoded_preds = tokenizer.batch_decode(preds, skip_special_tokens=True)
             decoded_labels = tokenizer.batch_decode(labels, skip_special_tokens=True)
-            result = qa_metric.compute(predictions=decoded_preds, references=decoded_labels)
+            
+            # SQuAD 평가 메트릭이 요구하는 형식으로 변환
+            formatted_preds = [{"id": str(i), "prediction_text": pred} for i, pred in enumerate(decoded_preds)]
+            # 실제 데이터에서는 answer_start를 제공해야 하지만, 여기서는 없으므로 0으로 처리합니다.
+            formatted_refs = [{"id": str(i), "answers": {"text": [ref], "answer_start": [0]}} for i, ref in enumerate(decoded_labels)]
+            
+            result = qa_metric.compute(predictions=formatted_preds, references=formatted_refs)
             return result
+
     elif task == "translation":
         def preprocess_function(batch):
             src_lang = args.dataset_name.split('_')[1]
