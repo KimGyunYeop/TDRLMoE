@@ -88,7 +88,6 @@ def parse_args():
     parser.add_argument(
         "--dataset_name", 
         type=str, 
-        choices=["samsum", "openwebtext", "wikitext-2", "wikitext-103", "glue", "superglue", "squad_v1", "xsum", "cnn_dailymail"],
         default="samsum", 
         help="Dataset name to load"
     )
