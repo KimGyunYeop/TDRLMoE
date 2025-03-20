@@ -173,7 +173,7 @@ def main():
         task = "qa"
         default_prefix = "question: "  # 질문에 대한 prefix 부여
     elif "wmt" in args.dataset_name:
-        if len(args.dataset_name.split("_")) != 3:
+        if len(args.dataset_name.split('_')) != 3:
             raise ValueError("WMT datasets should be in the format 'wmt19_xx_xx'")
         task = "translation"
         default_prefix = f"translate {args.dataset_name.split('_')[1]} to {args.dataset_name.split('_')[2]}: "  # 번역에 대한 prefix 부여
@@ -192,7 +192,7 @@ def main():
                           f"coef{args.RL_loss_coef}", args.RL_base_logit_type, args.RL_reward_stretegy, f"startRL{args.RL_start_epoch}"]
         if args.use_sample_lm_loss:
             run_name_parts.append("samplm")
-        args.run_name += "_" + "_".join(run_name_parts)
+        args.run_name += '_' + '_'.join(run_name_parts)
 
     if os.path.exists(os.path.join("results", exp_name, args.run_name, "pred_gold_samples.json")):
         print("Results already exist. Skipping training.")
@@ -226,9 +226,9 @@ def main():
         dataset = load_dataset("cnn_dailymail", "3.0.0")
     elif "wmt19" in args.dataset_name:
         try:
-            dataset = load_dataset("wmt/wmt19", "-".join([args.dataset_name.split("_")[1],args.dataset_name.split("_")[2]], trust_remote_code=True))
+            dataset = load_dataset("wmt/wmt19", "-".join([args.dataset_name.split('_')[1],args.dataset_name.split('_')[2]], trust_remote_code=True))
         except:
-            dataset = load_dataset("wmt/wmt19", "-".join([args.dataset_name.split("_")[2],args.dataset_name.split("_")[1]], trust_remote_code=True))
+            dataset = load_dataset("wmt/wmt19", "-".join([args.dataset_name.split('_')[2],args.dataset_name.split('_')[1]], trust_remote_code=True))
     else:
         raise ValueError(f"Unsupported dataset: {args.dataset_name}")
     print(dataset)
@@ -378,8 +378,8 @@ def main():
             return result
     elif task == "translation":
         def preprocess_function(batch):
-            src_lang = args.dataset_name.split("_")[1]
-            tgt_lang = args.dataset_name.split("_")[2]
+            src_lang = args.dataset_name.split('_')[1]
+            tgt_lang = args.dataset_name.split('_')[2]
             inputs = [args.source_prefix + t[src_lang] for t in batch["translation"]]
             targets = [t[tgt_lang] for t in batch["translation"]]
             model_inputs = tokenizer(inputs, truncation=True)
