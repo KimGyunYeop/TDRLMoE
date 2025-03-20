@@ -43,9 +43,8 @@ class TestEvaluationCallback(TrainerCallback):
         self.trainer = None
         self.generation_kwargs = generation_kwargs
 
-    # def on_train_begin(self, args, state, control, **kwargs):
-    #     # trainer 인스턴스를 저장합니다.
-    #     self.trainer = kwargs.get("trainer", None)
+    def on_train_begin(self, args, state, control, **kwargs):
+        print("--epoch--", state.epoch)
 
     def on_epoch_end(self, args, state, control, **kwargs):
         # 5 에폭마다 평가 수행
@@ -174,9 +173,9 @@ def main():
         dataset = load_dataset("cnn_dailymail", "3.0.0")
     elif "wmt19" in args.dataset_name:
         try:
-            dataset = load_dataset("wmt/wmt19", "-".join([args.dataset_name.split('_')[1],args.dataset_name.split('_')[2]], trust_remote_code=True))
+            dataset = load_dataset("wmt/wmt19", "-".join([args.dataset_name.split('_')[1],args.dataset_name.split('_')[2]]), trust_remote_code=True)
         except:
-            dataset = load_dataset("wmt/wmt19", "-".join([args.dataset_name.split('_')[2],args.dataset_name.split('_')[1]], trust_remote_code=True))
+            dataset = load_dataset("wmt/wmt19", "-".join([args.dataset_name.split('_')[2],args.dataset_name.split('_')[1]]), trust_remote_code=True)
     else:
         raise ValueError(f"Unsupported dataset: {args.dataset_name}")
     print("Loaded dataset:", dataset)
