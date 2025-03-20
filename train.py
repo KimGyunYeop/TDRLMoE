@@ -107,7 +107,24 @@ class TestEvaluationCallback(TrainerCallback):
         print(f"Test metrics at epoch {state.epoch}: {test_metrics}")
         wandb.log({f"test_{k}": v for k, v in test_metrics.items()})
         return control
-
+# ---------------------------------------------------------
+# RL Activation Callback: 각 에폭 시작 시 RL_start_epoch 기준으로 RL 활성화 여부 결정
+# ---------------------------------------------------------
+class RLActivationCallback(TrainerCallback):
+    def on_epoch_begin(self, args, state, control, **kwargs):
+        # 모델은 kwargs 또는 self.trainer를 통해 접근 가능
+        model = kwargs.get("model")
+        if model is None and hasattr(self, "trainer"):
+            model = self.trainer.model
+        if args.do_RL:
+            if state.epoch >= args.RL_start_epoch:
+                model.config.do_RL = True
+                print(f"Epoch {state.epoch:.2f}: RL 활성화 (do_RL=True)")
+            else:
+                model.config.do_RL = False
+                print(f"Epoch {state.epoch:.2f}: RL 비활성화 (do_RL=False)")
+        return control
+    
 # ---------------------------------------------------------
 # Argument parsing (dataset_name에 따라 자동으로 태스크 결정)
 # ---------------------------------------------------------
@@ -254,13 +271,14 @@ def main():
         config=model_config,
         device_map="auto"
     )
-    if args.do_RL:
-        if EPOCH >= args.RL_start_epoch:
-            model.config.do_RL = True
-            print("RL is activated")
-        else:
-            model.config.do_RL = False
-            print("RL is deactivated")
+
+    # 초기 RL 상태는 RL_start_epoch에 따라 설정 (첫 에폭 시작 전 설정)
+    if args.do_RL and 0 >= args.RL_start_epoch:
+        model.config.do_RL = True
+        print("초기 RL 활성화")
+    else:
+        model.config.do_RL = False
+        print("초기 RL 비활성화")
 
     # ---------------------------------------------------------
     # 전처리 함수 및 평가 지표 (태스크별)
@@ -456,6 +474,8 @@ def main():
         data_collator=data_collator,
         compute_metrics=compute_metrics,
     )
+    # RL 활성화 상태를 각 에폭 시작 시 업데이트하는 콜백 추가
+    trainer.add_callback(RLActivationCallback())
     test_callback = TestEvaluationCallback(tokenized_dataset["test"], compute_metrics, tokenizer, task, generation_kwargs)
     test_callback.trainer = trainer  # trainer 인스턴스를 직접 할당
     trainer.add_callback(test_callback)
