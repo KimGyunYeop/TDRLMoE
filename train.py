@@ -15,7 +15,7 @@ from transformers import (
     Seq2SeqTrainer,
     TrainerCallback,
 )
-from Custom_MoE3 import SwitchTransformersForConditionalGeneration, SwitchTransformersConfig
+from Custom_MoE_SwitchT import SwitchTransformersForConditionalGeneration, SwitchTransformersConfig
 
 # nltk 문장 토크나이저가 없으면 다운로드
 try:

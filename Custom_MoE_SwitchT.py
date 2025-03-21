@@ -22,6 +22,7 @@ from typing import Optional, Tuple, Union
 import torch
 import torch.nn as nn
 from torch.nn import CrossEntropyLoss
+from dataclasses import dataclass
 
 from transformers.activations import ACT2FN
 from transformers.cache_utils import Cache, DynamicCache, EncoderDecoderCache, StaticCache
@@ -31,7 +32,7 @@ from transformers.modeling_outputs import (
     MoEModelOutput,
     MoEModelOutputWithPastAndCrossAttentions,
     Seq2SeqMoEModelOutput,
-    Seq2SeqMoEOutput,
+    # Seq2SeqMoEOutput,
 )
 from transformers.modeling_utils import PreTrainedModel
 from transformers.pytorch_utils import ALL_LAYERNORM_LAYERS, find_pruneable_heads_and_indices, prune_linear_layer
@@ -151,9 +152,29 @@ class SwitchTransformersConfig(PretrainedConfig):
         use_cache=True,
         pad_token_id=0,
         eos_token_id=1,
-        mode="base",#added
+        RL_expert_change_ratio = 0.1,
+        do_RL = True,
+        RL_sample_num = 4,
+        RL_loss_coef = 1.0,
+        RL_sample_stretegy = "multinomial",
+        RL_base_logit_type = "top1",
+        RL_reward_stretegy = "minus",
+        use_sample_lm_loss = False,
+        RL_algo = "reinforce",
+        RL_ppo_eps = 0.2,
         **kwargs,
     ):
+        self.RL_expert_change_ratio = RL_expert_change_ratio
+        self.do_RL = do_RL
+        self.RL_sample_num = RL_sample_num
+        self.RL_loss_coef = RL_loss_coef
+        self.RL_sample_stretegy = RL_sample_stretegy
+        self.RL_base_logit_type = RL_base_logit_type
+        self.use_sample_lm_loss = use_sample_lm_loss
+        self.RL_reward_stretegy=RL_reward_stretegy
+        self.RL_algo = RL_algo
+        self.RL_ppo_eps = RL_ppo_eps
+        
         self.vocab_size = vocab_size
         self.d_model = d_model
         self.d_kv = d_kv
@@ -201,8 +222,6 @@ class SwitchTransformersConfig(PretrainedConfig):
         self.router_z_loss_coef = router_z_loss_coef
         self.router_aux_loss_coef = router_aux_loss_coef
         self.dense_act_fn = dense_act_fn
-        
-        self.mode = mode
 
         super().__init__(
             pad_token_id=pad_token_id,
@@ -301,6 +320,7 @@ class SwitchTransformersTop1Router(nn.Module):
         self.jitter_noise = config.router_jitter_noise
         self.ignore_padding_tokens = config.router_ignore_padding_tokens
         self.dtype = getattr(torch, config.router_dtype)
+        self.RL_sample_stretegy = config.RL_sample_stretegy
 
     def _compute_router_probabilities(self, hidden_states: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         r"""
@@ -343,7 +363,7 @@ class SwitchTransformersTop1Router(nn.Module):
         if not (hasattr(self.classifier, "SCB") or hasattr(self.classifier, "CB")):
             self.classifier = self.classifier.to(self.dtype)
 
-    def forward(self, hidden_states: torch.Tensor) -> Tuple:
+    def forward(self, hidden_states: torch.Tensor, current_change_map=None) -> Tuple:
         r"""
         Generic forward function for every Router class. Each Router expects to have the same input hidden states
         (`hidden_states`) corresponding to the hidden states for each token, the `expert_capacity` corresponding to the
@@ -363,6 +383,25 @@ class SwitchTransformersTop1Router(nn.Module):
         router_probs, router_logits = self._compute_router_probabilities(hidden_states)
 
         expert_index = torch.argmax(router_probs, dim=-1)
+        
+        if current_change_map is not None:
+            
+            if self.RL_sample_stretegy == "multinomial":
+                mapping_expert_index = torch.multinomial(router_probs.view(-1, self.num_experts), 1).view(expert_index.shape)
+            elif self.RL_sample_stretegy == "random":
+                mapping_expert_index = torch.randint(0, self.num_experts, expert_index.shape, device=expert_index.device)
+            
+            expert_index[:, current_change_map] = mapping_expert_index[:, current_change_map]
+            
+        if current_change_map is not None:
+            router_probs = torch.gather(
+                router_probs,
+                dim=2,
+                index=expert_index.unsqueeze(-1)
+            )
+        else:
+            router_probs = torch.max(router_probs, dim=-1).values.unsqueeze(-1)
+            
         expert_index = torch.nn.functional.one_hot(expert_index, num_classes=self.num_experts)
 
         # Mask tokens outside expert capacity. Sum over each sequence
@@ -370,8 +409,7 @@ class SwitchTransformersTop1Router(nn.Module):
         # mask if the token routed to to the expert will overflow
         expert_capacity_mask = token_priority <= self.expert_capacity
         expert_index = expert_index * expert_capacity_mask
-
-        router_probs = torch.max(router_probs, dim=-1).values.unsqueeze(-1)
+        
         return expert_index, router_probs, router_logits
 
 
@@ -442,7 +480,7 @@ class SwitchTransformersSparseMLP(nn.Module):
         for idx in range(config.num_experts):
             self.experts[f"expert_{idx}"] = expert_class(config)
 
-    def forward(self, hidden_states):
+    def forward(self, hidden_states, current_change_map):
         r"""
         Hold on, this will be slightly tricky to understand In the correct order, a MoE layer does the following:
 
@@ -455,7 +493,7 @@ class SwitchTransformersSparseMLP(nn.Module):
 
         """
         # Step 1: Get the router_mask from the router as wel as the probabilities
-        router_mask, router_probs, router_logits = self.router(hidden_states)
+        router_mask, router_probs, router_logits = self.router(hidden_states, current_change_map)
         expert_index = torch.argmax(router_mask, dim=-1)
 
         # The routers introduced might not always map all the tokens, to a router, which means that some hidden states
@@ -503,9 +541,12 @@ class SwitchTransformersLayerFF(nn.Module):
         self.layer_norm = SwitchTransformersLayerNorm(config.d_model, eps=config.layer_norm_epsilon)
         self.dropout = nn.Dropout(config.dropout_rate)
 
-    def forward(self, hidden_states, output_router_logits):
+    def forward(self, hidden_states, output_router_logits, current_change_map=None):
         forwarded_states = self.layer_norm(hidden_states)
-        forwarded_states = self.mlp(forwarded_states)
+        if self.is_sparse:
+            forwarded_states = self.mlp(forwarded_states, current_change_map)
+        else:
+            forwarded_states = self.mlp(forwarded_states)
 
         if isinstance(forwarded_states, tuple):
             forwarded_states, router_tuple = forwarded_states
@@ -859,6 +900,7 @@ class SwitchTransformersBlock(nn.Module):
         output_router_logits=True,
         return_dict=True,
         cache_position=None,
+        current_change_map=None,
     ):
         self_attention_outputs = self.layer[0](
             hidden_states,
@@ -903,7 +945,7 @@ class SwitchTransformersBlock(nn.Module):
             attention_outputs = attention_outputs + cross_attention_outputs[2:]
 
         # Apply Feed Forward layer
-        hidden_states = self.layer[-1](hidden_states, output_router_logits)
+        hidden_states = self.layer[-1](hidden_states, output_router_logits, current_change_map=current_change_map)
 
         if isinstance(hidden_states, tuple):
             hidden_states, router_tuple = hidden_states
@@ -1078,6 +1120,7 @@ class SwitchTransformersStack(SwitchTransformersPreTrainedModel):
         output_router_logits=True,
         return_dict=None,
         cache_position=None,
+        change_map=None,
     ):
         use_cache = use_cache if use_cache is not None else self.config.use_cache
         output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
@@ -1190,6 +1233,11 @@ class SwitchTransformersStack(SwitchTransformersPreTrainedModel):
         for i, layer_module in enumerate(self.block):
             layer_head_mask = head_mask[i]
             cross_attn_layer_head_mask = cross_attn_head_mask[i]
+            
+            if change_map is not None:
+                current_change_map = change_map[i]
+            else:
+                current_change_map = None
 
             if output_hidden_states:
                 all_hidden_states = all_hidden_states + (hidden_states,)
@@ -1211,6 +1259,7 @@ class SwitchTransformersStack(SwitchTransformersPreTrainedModel):
                     output_router_logits,
                     return_dict,
                     cache_position,
+                    current_change_map,
                 )
             else:
                 layer_outputs = layer_module(
@@ -1228,6 +1277,7 @@ class SwitchTransformersStack(SwitchTransformersPreTrainedModel):
                     output_router_logits=output_router_logits,
                     return_dict=return_dict,
                     cache_position=cache_position,
+                    current_change_map=current_change_map,
                 )
 
             router_probs = layer_outputs[-1]
@@ -1763,6 +1813,106 @@ class SwitchTransformersModel(SwitchTransformersPreTrainedModel):
             encoder_router_logits=encoder_outputs.router_probs,
         )
 
+import random
+def generate_change_map(seq_length, num_blocks, change_ratio=0.1):
+    """
+    seq_length * num_blocks 중에서 change_ratio 비율(%)만 True로 설정.
+    """
+    total_positions = seq_length * num_blocks
+    num_change = int(total_positions * change_ratio)
+
+    # 전체 인덱스 목록
+    all_positions = list(range(total_positions))
+    # 무작위로 num_change개 뽑음
+    changed_positions = random.sample(all_positions, num_change)
+
+    # 2D mask
+    change_map = [[False]*seq_length for _ in range(num_blocks)]
+    for pos in changed_positions:
+        block_i = pos // seq_length
+        token_j = pos % seq_length
+        change_map[block_i][token_j] = True
+
+    return change_map
+
+
+from transformers.utils import ModelOutput
+@dataclass
+class Seq2SeqMoEOutput(ModelOutput):
+    """
+    Base class for sequence-to-sequence language models outputs.
+
+    Args:
+        loss (`torch.FloatTensor` of shape `(1,)`, *optional*, returned when `labels` is provided):
+            Language modeling loss.
+        logits (`torch.FloatTensor` of shape `(batch_size, sequence_length, config.vocab_size)`):
+            Prediction scores of the language modeling head (scores for each vocabulary token before SoftMax).
+        past_key_values (`tuple(tuple(torch.FloatTensor))`, *optional*, returned when `use_cache=True` is passed or when `config.use_cache=True`):
+            Tuple of `tuple(torch.FloatTensor)` of length `config.n_layers`, with each tuple having 2 tensors of shape
+            `(batch_size, num_heads, sequence_length, embed_size_per_head)`) and 2 additional tensors of shape
+            `(batch_size, num_heads, encoder_sequence_length, embed_size_per_head)`.
+
+            Contains pre-computed hidden-states (key and values in the self-attention blocks and in the cross-attention
+            blocks) that can be used (see `past_key_values` input) to speed up sequential decoding.
+        decoder_hidden_states (`tuple(torch.FloatTensor)`, *optional*, returned when `output_hidden_states=True` is passed or when `config.output_hidden_states=True`):
+            Tuple of `torch.FloatTensor` (one for the output of the embeddings, if the model has an embedding layer, +
+            one for the output of each layer) of shape `(batch_size, sequence_length, hidden_size)`.
+
+            Hidden-states of the decoder at the output of each layer plus the initial embedding outputs.
+        decoder_attentions (`tuple(torch.FloatTensor)`, *optional*, returned when `output_attentions=True` is passed or when `config.output_attentions=True`):
+            Tuple of `torch.FloatTensor` (one for each layer) of shape `(batch_size, num_heads, sequence_length,
+            sequence_length)`.
+
+            Attentions weights of the decoder, after the attention softmax, used to compute the weighted average in the
+            self-attention heads.
+        decoder_router_logits (`tuple(torch.FloatTensor)`, *optional*, returned when `output_router_logits=True` is passed or when `config.add_router_probs=True`):
+            Tuple of `torch.FloatTensor` (one for each layer) of shape `(batch_size, sequence_length, num_experts)`.
+
+            Router logits of the decoder model, useful to compute the auxiliary loss for Mixture of Experts models.
+        cross_attentions (`tuple(torch.FloatTensor)`, *optional*, returned when `output_attentions=True` is passed or when `config.output_attentions=True`):
+            Tuple of `torch.FloatTensor` (one for each layer) of shape `(batch_size, num_heads, sequence_length,
+            sequence_length)`.
+
+            Attentions weights of the decoder's cross-attention layer, after the attention softmax, used to compute the
+            weighted average in the cross-attention heads.
+        encoder_last_hidden_state (`torch.FloatTensor` of shape `(batch_size, sequence_length, hidden_size)`, *optional*):
+            Sequence of hidden-states at the output of the last layer of the encoder of the model.
+        encoder_hidden_states (`tuple(torch.FloatTensor)`, *optional*, returned when `output_hidden_states=True` is passed or when `config.output_hidden_states=True`):
+            Tuple of `torch.FloatTensor` (one for the output of the embeddings, if the model has an embedding layer, +
+            one for the output of each layer) of shape `(batch_size, sequence_length, hidden_size)`.
+
+            Hidden-states of the encoder at the output of each layer plus the initial embedding outputs.
+        encoder_attentions (`tuple(torch.FloatTensor)`, *optional*, returned when `output_attentions=True` is passed or when `config.output_attentions=True`):
+            Tuple of `torch.FloatTensor` (one for each layer) of shape `(batch_size, num_heads, sequence_length,
+            sequence_length)`.
+
+            Attentions weights of the encoder, after the attention softmax, used to compute the weighted average in the
+            self-attention heads.
+        encoder_router_logits (`tuple(torch.FloatTensor)`, *optional*, returned when `output_router_logits=True` is passed or when `config.add_router_probs=True`):
+            Tuple of `torch.FloatTensor` (one for each layer) of shape `(batch_size, sequence_length, num_experts)`.
+
+            Router logits of the encoder model, useful to compute the auxiliary loss and z_loss for Mixture of Experts
+            models.
+    """
+
+    loss: Optional[torch.FloatTensor] = None
+    logits: torch.FloatTensor = None
+    lm_loss: torch.FloatTensor = None
+    encoder_z_loss: torch.FloatTensor = None
+    decoder_z_loss: torch.FloatTensor = None
+    encoder_aux_loss: torch.FloatTensor = None
+    decoder_aux_loss: torch.FloatTensor = None
+    decoder_rl_loss: torch.FloatTensor = None
+    sample_lm_loss: torch.FloatTensor = None
+    past_key_values: Optional[Tuple[Tuple[torch.FloatTensor]]] = None
+    decoder_hidden_states: Optional[Tuple[torch.FloatTensor, ...]] = None
+    decoder_attentions: Optional[Tuple[torch.FloatTensor, ...]] = None
+    decoder_router_logits: Optional[Tuple[torch.FloatTensor]] = None
+    cross_attentions: Optional[Tuple[torch.FloatTensor, ...]] = None
+    encoder_last_hidden_state: Optional[torch.FloatTensor] = None
+    encoder_hidden_states: Optional[Tuple[torch.FloatTensor, ...]] = None
+    encoder_attentions: Optional[Tuple[torch.FloatTensor, ...]] = None
+    encoder_router_logits: Optional[Tuple[torch.FloatTensor]] = None
 
 @add_start_docstrings(
     """SWITCH_TRANSFORMERS Model with a `language modeling` head on top.""", SWITCH_TRANSFORMERS_START_DOCSTRING
@@ -1793,7 +1943,15 @@ class SwitchTransformersForConditionalGeneration(SwitchTransformersPreTrainedMod
         self.router_z_loss_coef = config.router_z_loss_coef
         self.router_aux_loss_coef = config.router_aux_loss_coef
         
-        self.mode = config.mode
+        self.RL_expert_change_ratio = config.RL_expert_change_ratio
+        self.do_RL = config.do_RL
+        self.RL_sample_num = config.RL_sample_num
+        self.RL_loss_coef = config.RL_loss_coef
+        self.RL_base_logit_type = config.RL_base_logit_type
+        self.use_sample_lm_loss = config.use_sample_lm_loss
+        self.RL_reward_stretegy = config.RL_reward_stretegy
+        self.RL_algo = config.RL_algo
+        self.RL_ppo_eps = config.RL_ppo_eps
 
         # Initialize weights and apply final processing
         self.post_init()
@@ -1901,6 +2059,7 @@ class SwitchTransformersForConditionalGeneration(SwitchTransformersPreTrainedMod
                 output_hidden_states=output_hidden_states,
                 output_router_logits=output_router_logits,
                 return_dict=return_dict,
+                change_map=None,
             )
         elif return_dict and not isinstance(encoder_outputs, MoEModelOutput):
             encoder_outputs = MoEModelOutput(
@@ -1932,10 +2091,11 @@ class SwitchTransformersForConditionalGeneration(SwitchTransformersPreTrainedMod
             output_router_logits=output_router_logits,
             return_dict=return_dict,
             cache_position=cache_position,
+            change_map=None,
         )
 
         sequence_output = decoder_outputs[0]
-
+        
         if self.config.tie_word_embeddings:
             # Rescale output before projecting on vocab
             # See https://github.com/tensorflow/mesh/blob/fa19d69eafc9a482aff0b59ddd96b025c0cb207d/mesh_tensorflow/transformer/transformer.py#L586
@@ -1943,11 +2103,159 @@ class SwitchTransformersForConditionalGeneration(SwitchTransformersPreTrainedMod
 
         lm_logits = self.lm_head(sequence_output)
 
+        
+        # RL
+        if self.do_RL and self.training:
+            if self.RL_base_logit_type == "top1":
+                router_probs_list = []
+                branch_logits_list = [] 
+            else:
+                router_probs_list = [decoder_outputs.router_probs]
+                branch_logits_list = [lm_logits]
+                
+            # seq_length = input_ids.shape[1] if input_ids is not None else 128
+            # num_blocks = self.encoder.config.num_layers
+            # encoder_change_map = generate_change_map(seq_length, num_blocks, self.RL_expert_change_ratio)
+        
+            # 예) seq_length = decoder_input_ids.size(1) (or something similar)
+            seq_length = decoder_input_ids.shape[1] if decoder_input_ids is not None else 128
+            num_blocks = self.decoder.config.num_layers
+            decoder_change_map = generate_change_map(seq_length, num_blocks, self.RL_expert_change_ratio)
+            
+            # with torch.no_grad():
+            #     baseline_probs = self._compute_label_probs(lm_logits, labels)  # token별 p(correct)
+
+            for i in range(self.RL_sample_num - 1):
+                #encode
+                # branch_encoder_outputs = self.encoder(
+                #     input_ids=input_ids,
+                #     attention_mask=attention_mask,
+                #     inputs_embeds=inputs_embeds,
+                #     head_mask=head_mask,
+                #     output_attentions=output_attentions,
+                #     output_hidden_states=output_hidden_states,
+                #     output_router_logits=output_router_logits,
+                #     return_dict=return_dict,
+                #     change_map=encoder_change_map,
+                # )
+                # branch_hidden_states = branch_encoder_outputs[0]
+                
+                # Decode
+                branch_decoder_outputs = self.decoder(
+                    input_ids=decoder_input_ids,
+                    attention_mask=decoder_attention_mask,
+                    inputs_embeds=decoder_inputs_embeds,
+                    past_key_values=past_key_values,
+                    encoder_hidden_states=hidden_states,
+                    encoder_attention_mask=attention_mask,
+                    head_mask=decoder_head_mask,
+                    cross_attn_head_mask=cross_attn_head_mask,
+                    use_cache=use_cache,
+                    output_attentions=output_attentions,
+                    output_hidden_states=output_hidden_states,
+                    output_router_logits=output_router_logits,
+                    return_dict=return_dict,
+                    cache_position=cache_position,
+                    change_map=decoder_change_map,
+                )
+                branch_seq_out = branch_decoder_outputs[0]
+                router_probs_list.append(branch_decoder_outputs.router_probs)
+                
+                
+                if self.config.tie_word_embeddings:
+                    branch_seq_out = branch_seq_out * (self.model_dim**-0.5)
+
+                branch_logits = self.lm_head(branch_seq_out)  # (b, seq, vocab)
+                branch_logits_list.append(branch_logits)
+
+            rl_losses = []
+            if self.RL_base_logit_type == "top1":
+                baseline_probs = self._compute_label_probs(lm_logits, labels)  # token별 p(correct)
+            elif self.RL_base_logit_type == "mean":# (b, seq, vocab) 형태의 logits들을 쌓아서 (b, N, seq, vocab) 만든 뒤
+                # all_logits = torch.stack(branch_logits_list, dim=1)  # dim=1에 샘플 수 배치
+                # # 샘플 방향으로 평균 -> (b, seq, vocab)
+                # mean_logits = all_logits.mean(dim=1)
+                # baseline_probs = self._compute_label_probs(mean_logits, labels)
+                p_branches = []
+                for bl in branch_logits_list:
+                    p_branch = self._compute_label_probs(bl, labels)
+                    p_branches.append(p_branch)
+                baseline_probs = torch.stack(p_branches, dim=0).mean(dim=0)
+                
+            for bl, brp in zip(branch_logits_list, router_probs_list):
+                p_branch = self._compute_label_probs(bl, labels)
+                
+                # (2) reward => (b, seq)
+                reward = p_branch - baseline_probs.detach()
+                
+                if self.RL_reward_stretegy == "static":
+                    reward = reward.sign()
+                elif self.RL_reward_stretegy == "minus":
+                    reward = reward
+                elif self.RL_reward_stretegy == "positive":
+                    reward = reward.clamp(0, 1)
+                elif self.RL_reward_stretegy == "clamp":
+                    reward = reward.clamp(-1, 1)
+                
+                for k in range(len(brp)):
+                    if len(brp[k][0]) <= 1:
+                        continue
+                    router_prob = torch.nn.functional.softmax(brp[k][0], dim=-1)
+                    chosen_prob = torch.gather(
+                        router_prob, 
+                        -1, 
+                        brp[k][1].unsqueeze(-1)
+                    ).squeeze(-1)  # -> shape(b, seq)
+                    
+                    if self.RL_algo == "ppo":
+                        baseline_logs =  torch.nn.functional.softmax(decoder_outputs.router_probs[k][0], dim=-1)
+                        baseline_logs =  torch.gather(
+                            baseline_logs, 
+                            -1, 
+                            decoder_outputs.router_probs[k][1].unsqueeze(-1)
+                        ).squeeze(-1)
+                        baseline_logs = torch.log(baseline_logs + 1e-12).to(baseline_probs.device)
+    
+                        chosen_logs = torch.log(chosen_prob + 1e-12).to(baseline_probs.device)
+                        
+                        ratio = torch.exp(chosen_logs - baseline_logs.detach())
+                        cliped_ratio = ratio.clamp(1-self.RL_ppo_eps, 1+self.RL_ppo_eps)
+                        
+                        change_map_tensor = torch.tensor(decoder_change_map[k], device=reward.device, dtype=torch.bool)
+                        change_map_tensor = change_map_tensor.unsqueeze(0).expand_as(reward)
+                        change_tokens_count = (change_map_tensor == True).sum()
+                        if change_tokens_count.item() == 0:
+                            rl_loss_i = torch.tensor(0.0, device=reward.device)
+                        else:
+                            rl_loss_i = (-torch.min(ratio * reward, cliped_ratio * reward) * change_map_tensor).sum() / change_tokens_count
+                        # rl_loss_i = -torch.min(ratio * reward, cliped_ratio * reward).mean()
+                        
+                    elif self.RL_algo == "reinforce":
+                        logp = torch.log(chosen_prob + 1e-12).to(baseline_probs.device)  # -> shape(b, seq)
+                        
+                        change_map_tensor = torch.tensor(decoder_change_map[k], device=reward.device, dtype=torch.bool)
+                        change_map_tensor = change_map_tensor.unsqueeze(0).expand_as(reward)
+                        change_tokens_count = (change_map_tensor == True).sum()
+                        
+                        if change_tokens_count.item() == 0:
+                            rl_loss_i = torch.tensor(0.0, device=reward.device)
+                        else:
+                            rl_loss_i = -(reward * logp * change_map_tensor).sum() / change_tokens_count
+                        # rl_loss_i = -(reward * logp).mean()
+                        
+                    rl_losses.append(rl_loss_i)
+                    
+            rl_loss = torch.stack(rl_losses).mean()
+                
+        
         loss = None
         encoder_z_loss = None
         encoder_aux_loss = None
         decoder_z_loss = None
         decoder_aux_loss = None
+        decoder_rl_loss = None
+        sample_lm_loss = None
+        lm_loss=None
 
         if output_router_logits:
             # Compute the router loss (z_loss + auxiliary loss) for each router in the encoder and decoder
@@ -1973,13 +2281,33 @@ class SwitchTransformersForConditionalGeneration(SwitchTransformersPreTrainedMod
             loss_fct = CrossEntropyLoss(ignore_index=-100)
             # move labels to correct device to enable PP
             labels = labels.to(lm_logits.device)
-            loss = loss_fct(lm_logits.view(-1, lm_logits.size(-1)), labels.view(-1))
+            lm_loss = loss_fct(lm_logits.view(-1, lm_logits.size(-1)), labels.view(-1))
 
             if output_router_logits:
                 z_loss = self.router_z_loss_coef * (encoder_z_loss + decoder_z_loss)
                 aux_loss = self.router_aux_loss_coef * (encoder_aux_loss + decoder_aux_loss)
-                loss = loss + z_loss + aux_loss
-
+                loss = lm_loss + z_loss + aux_loss
+        
+        
+        if self.do_RL and self.training:
+            loss += self.RL_loss_coef * rl_loss
+            decoder_rl_loss = rl_loss
+            
+            if self.use_sample_lm_loss:
+                if self.RL_base_logit_type == "top1":
+                    branch_logits_list = branch_logits_list[1:]
+                
+                sample_lm_loss_fct = CrossEntropyLoss(ignore_index=-100)
+                sample_lm_loss = None
+                for bl in branch_logits_list:
+                    sll = sample_lm_loss_fct(bl.view(-1, lm_logits.size(-1)), labels.view(-1))
+                    if sample_lm_loss is None:
+                        sample_lm_loss = sll
+                    else:
+                        sample_lm_loss += sll
+                
+                loss += sample_lm_loss
+            
         if not return_dict:
             output = (lm_logits,)
             if output_router_logits:
@@ -1991,10 +2319,13 @@ class SwitchTransformersForConditionalGeneration(SwitchTransformersPreTrainedMod
         return Seq2SeqMoEOutput(
             loss=loss,
             logits=lm_logits,
+            lm_loss=lm_loss,
             encoder_z_loss=encoder_z_loss,
             encoder_aux_loss=encoder_aux_loss,
             decoder_z_loss=decoder_z_loss,
             decoder_aux_loss=decoder_aux_loss,
+            decoder_rl_loss=decoder_rl_loss,
+            sample_lm_loss=sample_lm_loss,
             past_key_values=decoder_outputs.past_key_values,
             decoder_hidden_states=decoder_outputs.hidden_states,
             decoder_attentions=decoder_outputs.attentions,
@@ -2017,6 +2348,27 @@ class SwitchTransformersForConditionalGeneration(SwitchTransformersPreTrainedMod
                 total_router_logits.append(router_logits.to(device))
                 total_expert_indexes.append(expert_indexes.to(device))
         return torch.cat(total_router_logits, dim=1), torch.cat(total_expert_indexes, dim=1)
+    
+    def _compute_label_probs(self, logits, labels):
+        """
+        logits: shape (b, seq, vocab)
+        labels: shape (b, seq)
+        output: shape (b, seq)
+        """
+        b, s, v = logits.shape
+        # convert to prob
+        probs = torch.nn.functional.softmax(logits, dim=-1)  # (b, s, v)
+        # gather correct label
+        labels_ = labels.clone()
+        mask = (labels_ == -100)
+        labels_[mask] = 0
+        # shape => (b*s, v)
+        flat_probs = probs.view(b*s, v)
+        gather_ = torch.gather(flat_probs, 1, labels_.view(-1,1)).squeeze(-1) # (b*s)
+        gather_ = gather_.view(b, s)
+        gather_[mask] = 0.0
+        return gather_
+    
     
     # original
     # def _unpack_router_logits(self, router_outputs):
