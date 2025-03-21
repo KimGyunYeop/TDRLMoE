@@ -486,10 +486,10 @@ class GPT2Top1Router(nn.Module):
         
         #delete fix here for gpt2 pre-trained like result at initalization
         # Mask tokens outside expert capacity. Sum over each sequence
-        token_priority = torch.cumsum(expert_index, dim=-2)
-        # mask if the token routed to to the expert will overflow
-        expert_capacity_mask = token_priority <= self.expert_capacity
-        expert_index = expert_index * expert_capacity_mask
+        # token_priority = torch.cumsum(expert_index, dim=-2)
+        # # mask if the token routed to to the expert will overflow
+        # expert_capacity_mask = token_priority <= self.expert_capacity
+        # expert_index = expert_index * expert_capacity_mask
 
         router_probs = torch.max(router_probs, dim=-1).values.unsqueeze(-1)
         return expert_index, router_probs, router_logits

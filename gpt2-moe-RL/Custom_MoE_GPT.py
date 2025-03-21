@@ -189,6 +189,24 @@ class GPT2Config(PretrainedConfig):
         eos_token_id=50256,
         scale_attn_by_inverse_layer_idx=False,
         reorder_and_upcast_attn=False,
+        num_experts=8,#added
+        expert_capacity=64,
+        router_bias=False,
+        router_jitter_noise=0.01,
+        router_dtype="float32",
+        router_ignore_padding_tokens=False,
+        router_z_loss_coef=0.001,
+        router_aux_loss_coef=0.001,
+        RL_expert_change_ratio = 0.1,#for RL
+        do_RL = True,
+        RL_sample_num = 4,
+        RL_loss_coef = 1.0,
+        RL_sample_stretegy = "multinomial",
+        RL_base_logit_type = "top1",
+        RL_reward_stretegy = "minus",
+        use_sample_lm_loss = False,
+        RL_algo = "reinforce",
+        RL_ppo_eps = 0.2,
         **kwargs,
     ):
         self.vocab_size = vocab_size
@@ -215,14 +233,38 @@ class GPT2Config(PretrainedConfig):
 
         self.bos_token_id = bos_token_id
         self.eos_token_id = eos_token_id
+        
+        #added
+        self.num_experts = num_experts
+        self.expert_capacity = expert_capacity
+        self.router_bias = router_bias
+        self.router_jitter_noise = router_jitter_noise
+        if router_dtype not in ["float32", "float16", "bfloat16"]:
+            raise ValueError(f"`router_dtype` must be one of 'float32', 'float16' or 'bfloat16', got {router_dtype}")
+        self.router_dtype = router_dtype
+        self.router_ignore_padding_tokens = router_ignore_padding_tokens
+        self.router_z_loss_coef = router_z_loss_coef
+        self.router_aux_loss_coef = router_aux_loss_coef
+        
+        #for RL
+        self.RL_expert_change_ratio = RL_expert_change_ratio
+        self.do_RL = do_RL
+        self.RL_sample_num = RL_sample_num
+        self.RL_loss_coef = RL_loss_coef
+        self.RL_sample_stretegy = RL_sample_stretegy
+        self.RL_base_logit_type = RL_base_logit_type
+        self.use_sample_lm_loss = use_sample_lm_loss
+        self.RL_reward_stretegy=RL_reward_stretegy
+        self.RL_algo = RL_algo
+        self.RL_ppo_eps = RL_ppo_eps
 
         super().__init__(bos_token_id=bos_token_id, eos_token_id=eos_token_id, **kwargs)
 
 logger = logging.get_logger(__name__)
 
+
 _CHECKPOINT_FOR_DOC = "openai-community/gpt2"
 _CONFIG_FOR_DOC = "GPT2Config"
-
 
 def load_tf_weights_in_gpt2(model, config, gpt2_checkpoint_path):
     """Load tf checkpoints in a pytorch model"""
@@ -320,6 +362,180 @@ def eager_attention_forward(module, query, key, value, attention_mask, head_mask
     attn_output = attn_output.transpose(1, 2)
 
     return attn_output, attn_weights
+
+#added
+def router_z_loss_func(router_logits: torch.Tensor) -> float:
+    r"""
+    Compute the router z-loss implemented in PyTorch.
+
+    The router z-loss was introduced in [Designing Effective Sparse Expert Models](https://arxiv.org/abs/2202.08906).
+    It encourages router logits to remain small in an effort to improve stability.
+
+    Args:
+        router_logits (`float`):
+            Input logits of shape [batch_size, sequence_length, num_experts]
+
+    Returns:
+        Scalar router z-loss.
+    """
+    num_groups, tokens_per_group, _ = router_logits.shape
+    log_z = torch.logsumexp(router_logits, dim=-1)
+    z_loss = log_z**2
+    return torch.sum(z_loss) / (num_groups * tokens_per_group)
+
+#added
+def load_balancing_loss_func(router_probs: torch.Tensor, expert_indices: torch.Tensor) -> float:
+    r"""
+    Computes auxiliary load balancing loss as in Switch Transformer - implemented in Pytorch.
+
+    See Switch Transformer (https://arxiv.org/abs/2101.03961) for more details. This function implements the loss
+    function presented in equations (4) - (6) of the paper. It aims at penalizing cases where the routing between
+    experts is too unbalanced.
+
+    Args:
+        router_probs (`torch.Tensor`):
+            Probability assigned to each expert per token. Shape: [batch_size, seqeunce_length, num_experts].
+        expert_indices (`torch.Tensor`):
+            Indices tensor of shape [batch_size, seqeunce_length] identifying the selected expert for a given token.
+
+    Returns:
+        The auxiliary loss.
+    """
+    num_experts = router_probs.shape[-1]
+
+    # cast the expert indices to int64, otherwise one-hot encoding will fail
+    if expert_indices.dtype != torch.int64:
+        expert_indices = expert_indices.to(torch.int64)
+
+    if len(expert_indices.shape) == 2:
+        expert_indices = expert_indices.unsqueeze(2)
+
+    expert_mask = torch.nn.functional.one_hot(expert_indices, num_experts)
+
+    # For a given token, determine if it was routed to a given expert.
+    expert_mask = torch.max(expert_mask, axis=-2).values
+
+    # cast to float32 otherwise mean will fail
+    expert_mask = expert_mask.to(torch.float32)
+    tokens_per_group_and_expert = torch.mean(expert_mask, axis=-2)
+
+    router_prob_per_group_and_expert = torch.mean(router_probs, axis=-2)
+    return torch.mean(tokens_per_group_and_expert * router_prob_per_group_and_expert) * (num_experts**2)
+
+#added
+class GPT2Top1Router(nn.Module):
+    """
+    Router using tokens choose top-1 experts assignment.
+
+    This router uses the same mechanism as in Switch Transformer (https://arxiv.org/abs/2101.03961) and V-MoE
+    (https://arxiv.org/abs/2106.05974): tokens choose their top experts. Items are sorted by router_probs and then
+    routed to their choice of expert until the expert's expert_capacity is reached. **There is no guarantee that each
+    token is processed by an expert**, or that each expert receives at least one token.
+
+    """
+
+    def __init__(self, config: GPT2Config):
+        super().__init__()
+        self.num_experts = config.num_experts
+        self.expert_capacity = config.expert_capacity
+        self.classifier = nn.Linear(config.hidden_size, self.num_experts, bias=config.router_bias)
+        self.jitter_noise = config.router_jitter_noise
+        self.ignore_padding_tokens = config.router_ignore_padding_tokens
+        self.dtype = getattr(torch, config.router_dtype)
+        self.RL_sample_stretegy = config.RL_sample_stretegy
+
+    def _compute_router_probabilities(self, hidden_states: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        r"""
+        Computes router probabilities from input hidden states.
+
+        Args:
+            hidden_states (`torch.Tensor`):
+                (batch_size, sequence_length, hidden_dim) from which router probabilities are computed.
+        Returns:
+            router_probabilities (`torch.Tensor`):
+                Tensor of shape (batch_size, sequence_length, num_experts) corresponding to the probabilities for each
+                token and expert. Used for routing tokens to experts.
+            router_logits (`torch.Tensor`):
+                Logits tensor of shape (batch_size, sequence_length, num_experts) corresponding to raw router logits.
+                This is used later for computing router z-loss.
+        """
+        # float32 is used to ensure stability. See the discussion of "selective precision" in
+        # https://arxiv.org/abs/2101.03961.
+        # We also store the previous dtype to cast back the output to the previous dtype
+        self.input_dtype = hidden_states.dtype
+        hidden_states = hidden_states.to(self.dtype)
+
+        if self.training and self.jitter_noise > 0:
+            # Multiply the token inputs by the uniform distribution - adding some noise
+            hidden_states *= torch.empty_like(hidden_states).uniform_(1.0 - self.jitter_noise, 1.0 + self.jitter_noise)
+
+        # Shape: [num_groups, tokens_per_group, num_experts]
+        self._cast_classifier()
+        router_logits = self.classifier(hidden_states)
+
+        # Apply Softmax and cast back to the original `dtype`
+        router_probabilities = nn.functional.softmax(router_logits, dim=-1, dtype=self.dtype).to(self.input_dtype)
+        return router_probabilities, router_logits
+
+    def _cast_classifier(self):
+        r"""
+        `bitsandbytes` `Linear8bitLt` layers does not support manual casting Therefore we need to check if they are an
+        instance of the `Linear8bitLt` class by checking special attributes.
+        """
+        if not (hasattr(self.classifier, "SCB") or hasattr(self.classifier, "CB")):
+            self.classifier = self.classifier.to(self.dtype)
+
+    def forward(self, hidden_states: torch.Tensor, current_change_map=None) -> Tuple:
+        r"""
+        Generic forward function for every Router class. Each Router expects to have the same input hidden states
+        (`hidden_states`) corresponding to the hidden states for each token, the `expert_capacity` corresponding to the
+        number of tokens the Router will send to each expert, some Routers can send up to few tokens to each expert.
+
+        Each Router works as the following: it expects the hidden states for each token, gets the `router_probs` and
+        `router_logits` from the `router_weights`. This will assign for each token, the raw probability to be assigned
+        to an expert. Then each Router class will have to define its own `_compute_routing_instructions`.
+
+        Args:
+            hidden_states (`torch.Tensor`) :
+                [num_groups, tokens_per_group, hidden_dim] inputs to send to experts.
+        Returns:
+            Tuple[`torch.Tensor`, `torch.Tensor`, `torch.Tensor`] Tuple containing the expert index, the router probs
+            and the router logits. The router probabilities and logits are required to compute the loss.
+        """
+        router_probs, router_logits = self._compute_router_probabilities(hidden_states)
+
+        expert_index = torch.argmax(router_probs, dim=-1)
+        
+        if current_change_map is not None:
+            
+            if self.RL_sample_stretegy == "multinomial":
+                mapping_expert_index = torch.multinomial(router_probs.view(-1, self.num_experts), 1).view(expert_index.shape)
+            elif self.RL_sample_stretegy == "random":
+                mapping_expert_index = torch.randint(0, self.num_experts, expert_index.shape, device=expert_index.device)
+            
+            expert_index[:, current_change_map] = mapping_expert_index[:, current_change_map]
+            
+        if current_change_map is not None:
+            router_probs = torch.gather(
+                router_probs,
+                dim=2,
+                index=expert_index.unsqueeze(-1)
+            )
+        else:
+            router_probs = torch.max(router_probs, dim=-1).values.unsqueeze(-1)
+            
+        expert_index = torch.nn.functional.one_hot(expert_index, num_classes=self.num_experts)
+        
+        #delete fix here for gpt2 pre-trained like result at initalization
+        # Mask tokens outside expert capacity. Sum over each sequence
+        token_priority = torch.cumsum(expert_index, dim=-2)
+        # mask if the token routed to to the expert will overflow
+        expert_capacity_mask = token_priority <= self.expert_capacity
+        expert_index = expert_index * expert_capacity_mask
+
+        # router_probs = torch.max(router_probs, dim=-1).values.unsqueeze(-1)
+        return expert_index, router_probs, router_logits
+
 
 
 class GPT2Attention(nn.Module):
@@ -543,6 +759,7 @@ class GPT2MLP(nn.Module):
 class GPT2Block(nn.Module):
     def __init__(self, config, layer_idx=None):
         super().__init__()
+        self.config = config
         hidden_size = config.hidden_size
         inner_dim = config.n_inner if config.n_inner is not None else 4 * hidden_size
 
@@ -555,6 +772,30 @@ class GPT2Block(nn.Module):
             self.ln_cross_attn = nn.LayerNorm(hidden_size, eps=config.layer_norm_epsilon)
 
         self.mlp = GPT2MLP(inner_dim, config)
+        self.router = GPT2Top1Router(self.config)
+        
+        # import copy
+        # self.experts = nn.ModuleDict()
+        # for idx in range(self.config.num_experts):
+        #     self.experts[f"expert_{idx}"] = copy.deepcopy(self.mlp)
+        #     # self.experts[f"expert_{idx}"].to(self.mlp.device)
+        
+    
+    def to_moe(self):
+        # # self.mlp의 학습된 파라미터들을 가져옵니다.
+        # mlp_state = self.mlp.state_dict()
+        
+        # # 각 expert에 대해 self.mlp의 state_dict를 로드하여 복제합니다.
+        # for expert in self.experts.values():
+        #     expert.load_state_dict(mlp_state)
+        
+        import copy
+        self.experts = nn.ModuleDict()
+        for idx in range(self.config.num_experts):
+            self.experts[f"expert_{idx}"] = copy.deepcopy(self.mlp)
+            # self.experts[f"expert_{idx}"].to(self.mlp.device)
+            
+        del self.mlp
 
     def forward(
         self,
@@ -566,6 +807,7 @@ class GPT2Block(nn.Module):
         encoder_attention_mask: Optional[torch.FloatTensor] = None,
         use_cache: Optional[bool] = False,
         output_attentions: Optional[bool] = False,
+        current_change_map=None,
     ) -> Union[Tuple[torch.Tensor], Optional[Tuple[torch.Tensor, Tuple[torch.FloatTensor, ...]]]]:
         residual = hidden_states
         hidden_states = self.ln_1(hidden_states)
@@ -606,14 +848,42 @@ class GPT2Block(nn.Module):
 
         residual = hidden_states
         hidden_states = self.ln_2(hidden_states)
-        feed_forward_hidden_states = self.mlp(hidden_states)
+        
+        
+        router_mask, router_probs, router_logits = self.router(hidden_states, current_change_map)
+        
+        expert_index = torch.argmax(router_mask, dim=-1)
+
+        # The routers introduced might not always map all the tokens, to a router, which means that some hidden states
+        # can be unchanged from one layer to another. That is why the hidden states are cloned before updating only the seleced ones.
+
+        next_states = hidden_states.clone()
+
+        router_mask = router_mask.bool()
+        batch_size, seq_len, num_experts = router_mask.shape
+        idx_mask = router_mask.reshape(batch_size * seq_len, num_experts).sum(dim=0)
+        idx_mask = torch.nonzero(idx_mask, as_tuple=True)[
+            0
+        ].tolist()  # length: number of "activated" expert / value: index
+        for idx in idx_mask:
+            next_states[router_mask[:, :, idx]] = getattr(self.experts, "expert_{}".format(idx))(
+                hidden_states[router_mask[:, :, idx]]
+            )
+
+        # feed_forward_hidden_states = router_probs * next_states
+        feed_forward_hidden_states = next_states #without router_probs scaling
+        
+        router_tuple = (router_logits, expert_index)
+        # return hidden_states, (router_logits, expert_index)
+    
+        # feed_forward_hidden_states = self.mlp(hidden_states)
         # residual connection
         hidden_states = residual + feed_forward_hidden_states
 
         if use_cache:
-            outputs = (hidden_states,) + outputs
+            outputs = (hidden_states,) + outputs + (router_tuple,)
         else:
-            outputs = (hidden_states,) + outputs[1:]
+            outputs = (hidden_states,) + outputs[1:] + (router_tuple,)
 
         return outputs  # hidden_states, present, (attentions, cross_attentions)
 
@@ -842,6 +1112,52 @@ DEPARALLELIZE_DOCSTRING = r"""
 """
 
 
+@dataclass
+class CustomBaseModelOutputWithPastAndCrossAttentions(ModelOutput):
+    """
+    Base class for model's outputs that may also contain a past key/values (to speed up sequential decoding).
+
+    Args:
+        last_hidden_state (`torch.FloatTensor` of shape `(batch_size, sequence_length, hidden_size)`):
+            Sequence of hidden-states at the output of the last layer of the model.
+
+            If `past_key_values` is used only the last hidden-state of the sequences of shape `(batch_size, 1,
+            hidden_size)` is output.
+        past_key_values (`tuple(tuple(torch.FloatTensor))`, *optional*, returned when `use_cache=True` is passed or when `config.use_cache=True`):
+            Tuple of `tuple(torch.FloatTensor)` of length `config.n_layers`, with each tuple having 2 tensors of shape
+            `(batch_size, num_heads, sequence_length, embed_size_per_head)`) and optionally if
+            `config.is_encoder_decoder=True` 2 additional tensors of shape `(batch_size, num_heads,
+            encoder_sequence_length, embed_size_per_head)`.
+
+            Contains pre-computed hidden-states (key and values in the self-attention blocks and optionally if
+            `config.is_encoder_decoder=True` in the cross-attention blocks) that can be used (see `past_key_values`
+            input) to speed up sequential decoding.
+        hidden_states (`tuple(torch.FloatTensor)`, *optional*, returned when `output_hidden_states=True` is passed or when `config.output_hidden_states=True`):
+            Tuple of `torch.FloatTensor` (one for the output of the embeddings, if the model has an embedding layer, +
+            one for the output of each layer) of shape `(batch_size, sequence_length, hidden_size)`.
+
+            Hidden-states of the model at the output of each layer plus the optional initial embedding outputs.
+        attentions (`tuple(torch.FloatTensor)`, *optional*, returned when `output_attentions=True` is passed or when `config.output_attentions=True`):
+            Tuple of `torch.FloatTensor` (one for each layer) of shape `(batch_size, num_heads, sequence_length,
+            sequence_length)`.
+
+            Attentions weights after the attention softmax, used to compute the weighted average in the self-attention
+            heads.
+        cross_attentions (`tuple(torch.FloatTensor)`, *optional*, returned when `output_attentions=True` and `config.add_cross_attention=True` is passed or when `config.output_attentions=True`):
+            Tuple of `torch.FloatTensor` (one for each layer) of shape `(batch_size, num_heads, sequence_length,
+            sequence_length)`.
+
+            Attentions weights of the decoder's cross-attention layer, after the attention softmax, used to compute the
+            weighted average in the cross-attention heads.
+    """
+
+    last_hidden_state: torch.FloatTensor = None
+    past_key_values: Optional[Tuple[Tuple[torch.FloatTensor]]] = None
+    hidden_states: Optional[Tuple[torch.FloatTensor, ...]] = None
+    attentions: Optional[Tuple[torch.FloatTensor, ...]] = None
+    cross_attentions: Optional[Tuple[torch.FloatTensor, ...]] = None
+    router_probs: Optional[Tuple[torch.FloatTensor]] = None
+
 @add_start_docstrings(
     "The bare GPT2 Model transformer outputting raw hidden-states without any specific head on top.",
     GPT2_START_DOCSTRING,
@@ -851,7 +1167,7 @@ class GPT2Model(GPT2PreTrainedModel):
 
     def __init__(self, config):
         super().__init__(config)
-
+        self.config = config
         self.embed_dim = config.hidden_size
 
         self.wte = nn.Embedding(config.vocab_size, self.embed_dim)
@@ -926,7 +1242,11 @@ class GPT2Model(GPT2PreTrainedModel):
         """
         for layer, heads in heads_to_prune.items():
             self.h[layer].attn.prune_heads(heads)
-
+    
+    def to_moe(self):
+        for i in range(len(self.h)):
+            self.h[i].to_moe()
+    
     @add_start_docstrings_to_model_forward(GPT2_INPUTS_DOCSTRING)
     @add_code_sample_docstrings(
         checkpoint=_CHECKPOINT_FOR_DOC,
@@ -947,7 +1267,9 @@ class GPT2Model(GPT2PreTrainedModel):
         use_cache: Optional[bool] = None,
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
+        output_router_logits: Optional[bool] = True,
         return_dict: Optional[bool] = None,
+        change_map=None,
     ) -> Union[Tuple, BaseModelOutputWithPastAndCrossAttentions]:
         output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
         output_hidden_states = (
@@ -1058,8 +1380,15 @@ class GPT2Model(GPT2PreTrainedModel):
         all_self_attentions = () if output_attentions else None
         all_cross_attentions = () if output_attentions and self.config.add_cross_attention else None
         all_hidden_states = () if output_hidden_states else None
+        all_router_probs = () if output_router_logits else None
         for i in range(len(self.h)):
             block, layer_past = self.h[i], past_key_values[i]
+            
+            if change_map is not None:
+                current_change_map = change_map[i]
+            else:
+                current_change_map = None
+                
             # Model parallel
             if self.model_parallel:
                 torch.cuda.set_device(hidden_states.device)
@@ -1085,6 +1414,7 @@ class GPT2Model(GPT2PreTrainedModel):
                     encoder_attention_mask,
                     use_cache,
                     output_attentions,
+                    current_change_map
                 )
             else:
                 outputs = block(
@@ -1096,8 +1426,10 @@ class GPT2Model(GPT2PreTrainedModel):
                     encoder_attention_mask=encoder_attention_mask,
                     use_cache=use_cache,
                     output_attentions=output_attentions,
+                    current_change_map=current_change_map
                 )
 
+            router_probs = outputs[-1]
             hidden_states = outputs[0]
             if use_cache is True:
                 presents = presents + (outputs[1],)
@@ -1119,22 +1451,97 @@ class GPT2Model(GPT2PreTrainedModel):
         # Add last hidden state
         if output_hidden_states:
             all_hidden_states = all_hidden_states + (hidden_states,)
+            
+        if output_router_logits:
+            all_router_probs = all_router_probs + (router_probs,)
 
         if not return_dict:
             return tuple(
                 v
-                for v in [hidden_states, presents, all_hidden_states, all_self_attentions, all_cross_attentions]
+                for v in [hidden_states, presents, all_hidden_states, all_self_attentions, all_cross_attentions, all_router_probs]
                 if v is not None
             )
 
-        return BaseModelOutputWithPastAndCrossAttentions(
+        return CustomBaseModelOutputWithPastAndCrossAttentions(
             last_hidden_state=hidden_states,
             past_key_values=presents,
             hidden_states=all_hidden_states,
             attentions=all_self_attentions,
             cross_attentions=all_cross_attentions,
+            router_probs=all_router_probs,
         )
 
+
+@dataclass
+class CustomCausalLMOutputWithCrossAttentions(ModelOutput):
+    """
+    Base class for causal language model (or autoregressive) outputs.
+
+    Args:
+        loss (`torch.FloatTensor` of shape `(1,)`, *optional*, returned when `labels` is provided):
+            Language modeling loss (for next-token prediction).
+        logits (`torch.FloatTensor` of shape `(batch_size, sequence_length, config.vocab_size)`):
+            Prediction scores of the language modeling head (scores for each vocabulary token before SoftMax).
+        hidden_states (`tuple(torch.FloatTensor)`, *optional*, returned when `output_hidden_states=True` is passed or when `config.output_hidden_states=True`):
+            Tuple of `torch.FloatTensor` (one for the output of the embeddings, if the model has an embedding layer, +
+            one for the output of each layer) of shape `(batch_size, sequence_length, hidden_size)`.
+
+            Hidden-states of the model at the output of each layer plus the optional initial embedding outputs.
+        attentions (`tuple(torch.FloatTensor)`, *optional*, returned when `output_attentions=True` is passed or when `config.output_attentions=True`):
+            Tuple of `torch.FloatTensor` (one for each layer) of shape `(batch_size, num_heads, sequence_length,
+            sequence_length)`.
+
+            Attentions weights after the attention softmax, used to compute the weighted average in the self-attention
+            heads.
+        cross_attentions (`tuple(torch.FloatTensor)`, *optional*, returned when `output_attentions=True` is passed or when `config.output_attentions=True`):
+            Tuple of `torch.FloatTensor` (one for each layer) of shape `(batch_size, num_heads, sequence_length,
+            sequence_length)`.
+
+            Cross attentions weights after the attention softmax, used to compute the weighted average in the
+            cross-attention heads.
+        past_key_values (`tuple(tuple(torch.FloatTensor))`, *optional*, returned when `use_cache=True` is passed or when `config.use_cache=True`):
+            Tuple of `torch.FloatTensor` tuples of length `config.n_layers`, with each tuple containing the cached key,
+            value states of the self-attention and the cross-attention layers if model is used in encoder-decoder
+            setting. Only relevant if `config.is_decoder = True`.
+
+            Contains pre-computed hidden-states (key and values in the attention blocks) that can be used (see
+            `past_key_values` input) to speed up sequential decoding.
+    """
+
+    loss: Optional[torch.FloatTensor] = None
+    logits: torch.FloatTensor = None
+    lm_loss: torch.FloatTensor = None
+    z_loss: torch.FloatTensor = None
+    aux_loss: torch.FloatTensor = None
+    rl_loss: torch.FloatTensor = None
+    sample_lm_loss: torch.FloatTensor = None
+    past_key_values: Optional[Tuple[Tuple[torch.FloatTensor]]] = None
+    hidden_states: Optional[Tuple[torch.FloatTensor, ...]] = None
+    attentions: Optional[Tuple[torch.FloatTensor, ...]] = None
+    cross_attentions: Optional[Tuple[torch.FloatTensor, ...]] = None
+
+
+import random
+def generate_change_map(seq_length, num_blocks, change_ratio=0.1):
+    """
+    seq_length * num_blocks 중에서 change_ratio 비율(%)만 True로 설정.
+    """
+    total_positions = seq_length * num_blocks
+    num_change = int(total_positions * change_ratio)
+
+    # 전체 인덱스 목록
+    all_positions = list(range(total_positions))
+    # 무작위로 num_change개 뽑음
+    changed_positions = random.sample(all_positions, num_change)
+
+    # 2D mask
+    change_map = [[False]*seq_length for _ in range(num_blocks)]
+    for pos in changed_positions:
+        block_i = pos // seq_length
+        token_j = pos % seq_length
+        change_map[block_i][token_j] = True
+
+    return change_map
 
 @add_start_docstrings(
     """
@@ -1154,6 +1561,19 @@ class GPT2LMHeadModel(GPT2PreTrainedModel, GenerationMixin):
         # Model parallel
         self.model_parallel = False
         self.device_map = None
+        
+        self.router_z_loss_coef = config.router_z_loss_coef
+        self.router_aux_loss_coef = config.router_aux_loss_coef
+        
+        self.RL_expert_change_ratio = config.RL_expert_change_ratio
+        self.do_RL = config.do_RL
+        self.RL_sample_num = config.RL_sample_num
+        self.RL_loss_coef = config.RL_loss_coef
+        self.RL_base_logit_type = config.RL_base_logit_type
+        self.use_sample_lm_loss = config.use_sample_lm_loss
+        self.RL_reward_stretegy = config.RL_reward_stretegy
+        self.RL_algo = config.RL_algo
+        self.RL_ppo_eps = config.RL_ppo_eps
 
         # Initialize weights and apply final processing
         self.post_init()
@@ -1194,7 +1614,23 @@ class GPT2LMHeadModel(GPT2PreTrainedModel, GenerationMixin):
 
     def set_output_embeddings(self, new_embeddings):
         self.lm_head = new_embeddings
+        
+    def to_moe(self):
+        self.transformer.to_moe()
 
+
+    def _unpack_router_logits(self, router_outputs, device=None):
+        total_router_logits = []
+        total_expert_indexes = []
+        if device is None:
+            device = router_outputs[-1][0].device
+        for router_output in router_outputs:
+            if len(router_output[0].shape) > 1:
+                router_logits, expert_indexes = router_output
+                total_router_logits.append(router_logits.to(device))
+                total_expert_indexes.append(expert_indexes.to(device))
+        return torch.cat(total_router_logits, dim=1), torch.cat(total_expert_indexes, dim=1)
+    
     @add_start_docstrings_to_model_forward(GPT2_INPUTS_DOCSTRING)
     @add_code_sample_docstrings(
         checkpoint=_CHECKPOINT_FOR_DOC,
@@ -1216,6 +1652,7 @@ class GPT2LMHeadModel(GPT2PreTrainedModel, GenerationMixin):
         use_cache: Optional[bool] = None,
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
+        output_router_logits: Optional[bool] = True,
         return_dict: Optional[bool] = None,
         **kwargs,
     ) -> Union[Tuple, CausalLMOutputWithCrossAttentions]:
@@ -1251,23 +1688,189 @@ class GPT2LMHeadModel(GPT2PreTrainedModel, GenerationMixin):
 
         lm_logits = self.lm_head(hidden_states)
 
+        # RL
+        if self.do_RL and self.training:
+            if self.RL_base_logit_type == "top1":
+                router_probs_list = []
+                branch_logits_list = [] 
+            else:
+                router_probs_list = [transformer_outputs.router_probs]
+                branch_logits_list = [lm_logits]
+                
+            # seq_length = input_ids.shape[1] if input_ids is not None else 128
+            # num_blocks = self.encoder.config.num_layers
+            # encoder_change_map = generate_change_map(seq_length, num_blocks, self.RL_expert_change_ratio)
+        
+            # 예) seq_length = decoder_input_ids.size(1) (or something similar)
+            seq_length = input_ids.shape[1] if input_ids is not None else 128
+            num_blocks = self.transformer.config.n_layer
+            decoder_change_map = generate_change_map(seq_length, num_blocks, self.RL_expert_change_ratio)
+            
+            for i in range(self.RL_sample_num - 1):
+                # Change map
+                change_map = decoder_change_map
+                # change_map = encoder_change_map
+                # change_map = None
+                
+                # Forward
+                branch_transformer_outputs = self.transformer(
+                    input_ids,
+                    past_key_values=past_key_values,
+                    attention_mask=attention_mask,
+                    token_type_ids=token_type_ids,
+                    position_ids=position_ids,
+                    head_mask=head_mask,
+                    inputs_embeds=inputs_embeds,
+                    encoder_hidden_states=encoder_hidden_states,
+                    encoder_attention_mask=encoder_attention_mask,
+                    use_cache=use_cache,
+                    output_attentions=output_attentions,
+                    output_hidden_states=output_hidden_states,
+                    return_dict=return_dict,
+                    change_map=change_map,
+                )
+                branch_hidden_states = branch_transformer_outputs[0]
+                router_probs_list.append(branch_hidden_states.router_probs)
+                
+                branch_lm_logits = self.lm_head(branch_hidden_states)
+                branch_logits_list.append(branch_lm_logits)
+                
+            
+            rl_losses = []
+            if self.RL_base_logit_type == "top1":
+                baseline_probs = self._compute_label_probs(lm_logits, labels)  # token별 p(correct)
+            elif self.RL_base_logit_type == "mean":# (b, seq, vocab) 형태의 logits들을 쌓아서 (b, N, seq, vocab) 만든 뒤
+                # all_logits = torch.stack(branch_logits_list, dim=1)  # dim=1에 샘플 수 배치
+                # # 샘플 방향으로 평균 -> (b, seq, vocab)
+                # mean_logits = all_logits.mean(dim=1)
+                # baseline_probs = self._compute_label_probs(mean_logits, labels)
+                p_branches = []
+                for bl in branch_logits_list:
+                    p_branch = self._compute_label_probs(bl, labels)
+                    p_branches.append(p_branch)
+                baseline_probs = torch.stack(p_branches, dim=0).mean(dim=0)
+                
+            for bl, brp in zip(branch_logits_list, router_probs_list):
+                p_branch = self._compute_label_probs(bl, labels)
+                
+                # (2) reward => (b, seq)
+                reward = p_branch - baseline_probs.detach()
+                
+                if self.RL_reward_stretegy == "static":
+                    reward = reward.sign()
+                elif self.RL_reward_stretegy == "minus":
+                    reward = reward
+                elif self.RL_reward_stretegy == "positive":
+                    reward = reward.clamp(0, 1)
+                elif self.RL_reward_stretegy == "clamp":
+                    reward = reward.clamp(-1, 1)
+                
+                for k in range(len(brp)):
+                    if len(brp[k][0]) <= 1:
+                        continue
+                    router_prob = torch.nn.functional.softmax(brp[k][0], dim=-1)
+                    chosen_prob = torch.gather(
+                        router_prob, 
+                        -1, 
+                        brp[k][1].unsqueeze(-1)
+                    ).squeeze(-1)  # -> shape(b, seq)
+                    
+                    if self.RL_algo == "ppo":
+                        baseline_logs =  torch.nn.functional.softmax(decoder_outputs.router_probs[k][0], dim=-1)
+                        baseline_logs =  torch.gather(
+                            baseline_logs, 
+                            -1, 
+                            decoder_outputs.router_probs[k][1].unsqueeze(-1)
+                        ).squeeze(-1)
+                        baseline_logs = torch.log(baseline_logs + 1e-12).to(baseline_probs.device)
+    
+                        chosen_logs = torch.log(chosen_prob + 1e-12).to(baseline_probs.device)
+                        
+                        ratio = torch.exp(chosen_logs - baseline_logs.detach())
+                        cliped_ratio = ratio.clamp(1-self.RL_ppo_eps, 1+self.RL_ppo_eps)
+                        
+                        change_map_tensor = torch.tensor(decoder_change_map[k], device=reward.device, dtype=torch.bool)
+                        change_map_tensor = change_map_tensor.unsqueeze(0).expand_as(reward)
+                        change_tokens_count = (change_map_tensor == True).sum()
+                        if change_tokens_count.item() == 0:
+                            rl_loss_i = torch.tensor(0.0, device=reward.device)
+                        else:
+                            rl_loss_i = (-torch.min(ratio * reward, cliped_ratio * reward) * change_map_tensor).sum() / change_tokens_count
+                        # rl_loss_i = -torch.min(ratio * reward, cliped_ratio * reward).mean()
+                        
+                    elif self.RL_algo == "reinforce":
+                        logp = torch.log(chosen_prob + 1e-12).to(baseline_probs.device)  # -> shape(b, seq)
+                        
+                        change_map_tensor = torch.tensor(decoder_change_map[k], device=reward.device, dtype=torch.bool)
+                        change_map_tensor = change_map_tensor.unsqueeze(0).expand_as(reward)
+                        change_tokens_count = (change_map_tensor == True).sum()
+                        
+                        if change_tokens_count.item() == 0:
+                            rl_loss_i = torch.tensor(0.0, device=reward.device)
+                        else:
+                            rl_loss_i = -(reward * logp * change_map_tensor).sum() / change_tokens_count
+                        # rl_loss_i = -(reward * logp).mean()
+                        
+                    rl_losses.append(rl_loss_i)
+                    
+            rl_loss = torch.stack(rl_losses).mean()
+        
         loss = None
         if labels is not None:
             # Flatten the tokens
-            loss = self.loss_function(
+            lm_loss = self.loss_function(
                 lm_logits,
                 labels,
                 vocab_size=self.config.vocab_size,
                 **kwargs,
             )
+            
+        decoder_z_loss = None
+        decoder_aux_loss = None
+        
+        
+        if output_router_logits:
+            decoder_router_logits, decoder_expert_indexes = self._unpack_router_logits(transformer_outputs[-1], device=lm_logits.device)
+            decoder_z_loss = router_z_loss_func(decoder_router_logits)
+            decoder_router_probs = nn.Softmax(dim=-1)(decoder_router_logits)
+            decoder_aux_loss = load_balancing_loss_func(decoder_router_probs, decoder_expert_indexes)
+            
+            z_loss = self.router_z_loss_coef * (decoder_z_loss)
+            aux_loss = self.router_aux_loss_coef * (decoder_aux_loss)
+            
+            loss = lm_loss + z_loss + aux_loss
 
+        if self.do_RL and self.training:
+            loss += self.RL_loss_coef * rl_loss
+            decoder_rl_loss = rl_loss
+            
+            if self.use_sample_lm_loss:
+                if self.RL_base_logit_type == "top1":
+                    branch_logits_list = branch_logits_list[1:]
+                
+                sample_lm_loss_fct = CrossEntropyLoss(ignore_index=-100)
+                sample_lm_loss = None
+                for bl in branch_logits_list:
+                    sll = sample_lm_loss_fct(bl.view(-1, lm_logits.size(-1)), labels.view(-1))
+                    if sample_lm_loss is None:
+                        sample_lm_loss = sll
+                    else:
+                        sample_lm_loss += sll
+                
+                loss += sample_lm_loss
+            
         if not return_dict:
             output = (lm_logits,) + transformer_outputs[1:]
-            return ((loss,) + output) if loss is not None else output
+            return ((loss, lm_loss, z_loss, aux_loss) + output) if loss is not None else output
 
-        return CausalLMOutputWithCrossAttentions(
+        return CustomCausalLMOutputWithCrossAttentions(
             loss=loss,
+            lm_loss=lm_loss,
+            z_loss=z_loss,
+            aux_loss=aux_loss,
             logits=lm_logits,
+            rl_loss=rl_loss,
+            sample_lm_loss=sample_lm_loss,
             past_key_values=transformer_outputs.past_key_values,
             hidden_states=transformer_outputs.hidden_states,
             attentions=transformer_outputs.attentions,
