@@ -209,6 +209,7 @@ def main():
         seed=args.seed,
         fp16=args.fp16,
         save_total_limit=3,
+        eval_accumulation_steps=1,
     )
 
     trainer = CustomTrainer(
