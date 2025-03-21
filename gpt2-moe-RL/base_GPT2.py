@@ -731,20 +731,26 @@ class GPT2Block(nn.Module):
         self.mlp = GPT2MLP(inner_dim, config)
         self.router = GPT2Top1Router(self.config)
         
+        # import copy
+        # self.experts = nn.ModuleDict()
+        # for idx in range(self.config.num_experts):
+        #     self.experts[f"expert_{idx}"] = copy.deepcopy(self.mlp)
+        #     # self.experts[f"expert_{idx}"].to(self.mlp.device)
+        
+    
+    def to_moe(self):
+        # # self.mlp의 학습된 파라미터들을 가져옵니다.
+        # mlp_state = self.mlp.state_dict()
+        
+        # # 각 expert에 대해 self.mlp의 state_dict를 로드하여 복제합니다.
+        # for expert in self.experts.values():
+        #     expert.load_state_dict(mlp_state)
+        
         import copy
         self.experts = nn.ModuleDict()
         for idx in range(self.config.num_experts):
             self.experts[f"expert_{idx}"] = copy.deepcopy(self.mlp)
             # self.experts[f"expert_{idx}"].to(self.mlp.device)
-        
-    
-    def to_moe(self):
-        # self.mlp의 학습된 파라미터들을 가져옵니다.
-        mlp_state = self.mlp.state_dict()
-        
-        # 각 expert에 대해 self.mlp의 state_dict를 로드하여 복제합니다.
-        for expert in self.experts.values():
-            expert.load_state_dict(mlp_state)
             
         del self.mlp
 
