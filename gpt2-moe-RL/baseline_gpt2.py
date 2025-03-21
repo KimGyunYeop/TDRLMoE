@@ -16,6 +16,7 @@ from transformers import (
     AutoConfig,
 )
 from base_GPT2 import GPT2LMHeadModel  # MOE 관련 함수 to_moe() 포함
+# from transformers import GPT2LMHeadModel
 # nltk 문장 토크나이저 다운로드 (없으면)
 try:
     nltk.download('punkt_tab')
@@ -39,7 +40,7 @@ def parse_args():
     parser.add_argument("--accumulation_steps", type=int, default=None, help="Gradient accumulation steps")
     parser.add_argument("--per_device_eval_batch_size", type=int, default=4, help="Batch size per device during evaluation")
     parser.add_argument("--save_steps", type=int, default=500, help="Save checkpoint every X update steps")
-    parser.add_argument("--logging_steps", type=int, default=100, help="Log every X update steps")
+    parser.add_argument("--logging_steps", type=int, default=10, help="Log every X update steps")
     parser.add_argument("--fp16", action="store_true", default=False, help="Use mixed precision training")
     # 기타 옵셔널 인자
     parser.add_argument("--seed", type=int, default=42, help="Random seed for reproducibility")

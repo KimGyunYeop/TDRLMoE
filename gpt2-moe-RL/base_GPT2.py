@@ -483,7 +483,8 @@ class GPT2Top1Router(nn.Module):
 
         expert_index = torch.argmax(router_probs, dim=-1)
         expert_index = torch.nn.functional.one_hot(expert_index, num_classes=self.num_experts)
-
+        
+        #delete fix here for gpt2 pre-trained like result at initalization
         # Mask tokens outside expert capacity. Sum over each sequence
         token_priority = torch.cumsum(expert_index, dim=-2)
         # mask if the token routed to to the expert will overflow
@@ -826,7 +827,9 @@ class GPT2Block(nn.Module):
                 hidden_states[router_mask[:, :, idx]]
             )
 
-        feed_forward_hidden_states = router_probs * next_states
+        # feed_forward_hidden_states = router_probs * next_states
+        feed_forward_hidden_states = next_states #without router_probs scaling
+        
         router_tuple = (router_logits, expert_index)
         # return hidden_states, (router_logits, expert_index)
     
