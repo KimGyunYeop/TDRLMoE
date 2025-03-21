@@ -739,13 +739,12 @@ class GPT2Block(nn.Module):
         
     
     def to_moe(self):
-        # import copy
-        # # Step 2: Get the experts
-        # self.experts = nn.ModuleDict()
-        # for idx in range(self.config.num_experts):
-        #     self.experts[f"expert_{idx}"] = copy.deepcopy(self.mlp)
-        #     # self.experts[f"expert_{idx}"].to(self.mlp.device)
-        pass
+        # self.mlp의 학습된 파라미터들을 가져옵니다.
+        mlp_state = self.mlp.state_dict()
+        
+        # 각 expert에 대해 self.mlp의 state_dict를 로드하여 복제합니다.
+        for expert in self.experts.values():
+            expert.load_state_dict(mlp_state)
 
     def forward(
         self,
