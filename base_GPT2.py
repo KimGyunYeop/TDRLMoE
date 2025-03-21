@@ -729,11 +729,11 @@ class GPT2Block(nn.Module):
             self.ln_cross_attn = nn.LayerNorm(hidden_size, eps=config.layer_norm_epsilon)
 
         self.mlp = GPT2MLP(inner_dim, config)
+        self.router = GPT2Top1Router(self.config)
         
     
     def to_moe(self):
         import copy
-        self.router = GPT2Top1Router(self.config)
         # Step 2: Get the experts
         self.experts = nn.ModuleDict()
         for idx in range(self.config.num_experts):
