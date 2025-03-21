@@ -731,15 +731,20 @@ class GPT2Block(nn.Module):
         self.mlp = GPT2MLP(inner_dim, config)
         self.router = GPT2Top1Router(self.config)
         
-    
-    def to_moe(self):
-        import copy
-        # Step 2: Get the experts
         self.experts = nn.ModuleDict()
         for idx in range(self.config.num_experts):
             self.experts[f"expert_{idx}"] = copy.deepcopy(self.mlp)
             # self.experts[f"expert_{idx}"].to(self.mlp.device)
         
+    
+    def to_moe(self):
+        # import copy
+        # # Step 2: Get the experts
+        # self.experts = nn.ModuleDict()
+        # for idx in range(self.config.num_experts):
+        #     self.experts[f"expert_{idx}"] = copy.deepcopy(self.mlp)
+        #     # self.experts[f"expert_{idx}"].to(self.mlp.device)
+        pass
 
     def forward(
         self,
