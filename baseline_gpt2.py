@@ -207,7 +207,7 @@ def main():
     # ------------------------------
     # 5. Data Collator
     # ------------------------------
-    data_collator = DataCollatorForLanguageModeling(tokenizer=tokenizer, mlm=False)
+    data_collator = DataCollatorForLanguageModeling(tokenizer=tokenizer, mlm=False, padding=True)
 
 
     # ------------------------------
