@@ -188,9 +188,9 @@ class GPT2Config(PretrainedConfig):
         bos_token_id=50256,
         eos_token_id=50256,
         scale_attn_by_inverse_layer_idx=False,
+        reorder_and_upcast_attn=False,
         num_experts=8,#added
         expert_capacity=64,
-        reorder_and_upcast_attn=False,
         router_bias=False,
         router_jitter_noise=0.01,
         router_dtype="float32",

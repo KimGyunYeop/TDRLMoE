@@ -181,7 +181,6 @@ def main():
     moe_config = AutoConfig.from_pretrained(args.moe_config_path)
     model_config.num_experts = moe_config.num_experts
     model_config.expert_capacity = moe_config.expert_capacity
-    model_config.reorder_and_upcast_attn = moe_config.reorder_and_upcast_attn
     model_config.router_bias = moe_config.router_bias
     model_config.router_jitter_noise = moe_config.router_jitter_noise
     model_config.router_dtype = moe_config.router_dtype
@@ -189,7 +188,7 @@ def main():
     model_config.router_z_loss_coef = moe_config.router_z_loss_coef
     model_config.router_aux_loss_coef = moe_config.router_aux_loss_coef
     
-    model = GPT2LMheadModel.from_pretrained(
+    model = GPT2LMHeadModel.from_pretrained(
         pretrained_model_name_or_path=args.model_name,
         config=model_config,
         device_map="auto"
