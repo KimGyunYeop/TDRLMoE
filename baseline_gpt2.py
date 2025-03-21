@@ -13,7 +13,7 @@ from transformers import (
     TrainerCallback,
     AutoConfig,
 )
-from base_GPT2 import GPT2LMheadModel
+from base_GPT2 import GPT2LMHeadModel
 import os
 import torch
 import math
