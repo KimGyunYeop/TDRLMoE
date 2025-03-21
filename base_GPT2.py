@@ -745,6 +745,8 @@ class GPT2Block(nn.Module):
         # 각 expert에 대해 self.mlp의 state_dict를 로드하여 복제합니다.
         for expert in self.experts.values():
             expert.load_state_dict(mlp_state)
+            
+        del self.mlp
 
     def forward(
         self,
