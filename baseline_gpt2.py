@@ -52,7 +52,7 @@ def parse_args():
     return parser.parse_args()
 
 class CustomTrainer(Trainer):
-    def compute_loss(self, model, inputs, return_outputs=False):
+    def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         outputs = model(**inputs)
         loss = outputs.loss if outputs.loss is not None else outputs[0]
         log_dict = {}
