@@ -738,7 +738,7 @@ class GPT2Block(nn.Module):
         self.experts = nn.ModuleDict()
         for idx in range(self.config.num_experts):
             self.experts[f"expert_{idx}"] = copy.deepcopy(self.mlp)
-            self.experts[f"expert_{idx}"].to(self.mlp.device)
+            # self.experts[f"expert_{idx}"].to(self.mlp.device)
         
 
     def forward(
