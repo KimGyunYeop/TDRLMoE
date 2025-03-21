@@ -1468,6 +1468,9 @@ class GPT2LMHeadModel(GPT2PreTrainedModel, GenerationMixin):
         # Model parallel
         self.model_parallel = False
         self.device_map = None
+        
+        self.router_z_loss_coef = config.router_z_loss_coef
+        self.router_aux_loss_coef = config.router_aux_loss_coef
 
         # Initialize weights and apply final processing
         self.post_init()
