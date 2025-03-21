@@ -1512,6 +1512,19 @@ class GPT2LMHeadModel(GPT2PreTrainedModel, GenerationMixin):
     def to_moe(self):
         self.transformer.to_moe()
 
+
+    def _unpack_router_logits(self, router_outputs, device=None):
+        total_router_logits = []
+        total_expert_indexes = []
+        if device is None:
+            device = router_outputs[-1][0].device
+        for router_output in router_outputs:
+            if len(router_output[0].shape) > 1:
+                router_logits, expert_indexes = router_output
+                total_router_logits.append(router_logits.to(device))
+                total_expert_indexes.append(expert_indexes.to(device))
+        return torch.cat(total_router_logits, dim=1), torch.cat(total_expert_indexes, dim=1)
+    
     @add_start_docstrings_to_model_forward(GPT2_INPUTS_DOCSTRING)
     @add_code_sample_docstrings(
         checkpoint=_CHECKPOINT_FOR_DOC,
