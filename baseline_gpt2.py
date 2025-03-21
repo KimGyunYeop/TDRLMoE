@@ -162,7 +162,7 @@ def main():
     )
     train_dataset = lm_datasets["train"]
     eval_dataset = lm_datasets["validation"] if "validation" in lm_datasets else None
-    test_dataset = eval_dataset
+    test_dataset = lm_datasets["test"] if "test" in lm_datasets else eval_dataset
 
     # 모델 및 MOE 설정
     model_config = AutoConfig.from_pretrained(args.model_name)
