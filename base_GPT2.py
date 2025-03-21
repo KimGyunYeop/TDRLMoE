@@ -731,6 +731,7 @@ class GPT2Block(nn.Module):
         self.mlp = GPT2MLP(inner_dim, config)
         self.router = GPT2Top1Router(self.config)
         
+        import copy
         self.experts = nn.ModuleDict()
         for idx in range(self.config.num_experts):
             self.experts[f"expert_{idx}"] = copy.deepcopy(self.mlp)
