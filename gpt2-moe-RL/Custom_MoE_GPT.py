@@ -1730,7 +1730,7 @@ class GPT2LMHeadModel(GPT2PreTrainedModel, GenerationMixin):
                     change_map=change_map,
                 )
                 branch_hidden_states = branch_transformer_outputs[0]
-                router_probs_list.append(branch_hidden_states.router_probs)
+                router_probs_list.append(branch_transformer_outputs.router_probs)
                 
                 branch_lm_logits = self.lm_head(branch_hidden_states)
                 branch_logits_list.append(branch_lm_logits)
@@ -1827,6 +1827,8 @@ class GPT2LMHeadModel(GPT2PreTrainedModel, GenerationMixin):
             
         decoder_z_loss = None
         decoder_aux_loss = None
+        rl_loss = None
+        sample_lm_loss = None
         
         
         if output_router_logits:
@@ -1890,6 +1892,26 @@ class GPT2LMHeadModel(GPT2PreTrainedModel, GenerationMixin):
             tuple(past_state.index_select(0, beam_idx.to(past_state.device)) for past_state in layer_past)
             for layer_past in past_key_values
         )
+        
+    def _compute_label_probs(self, logits, labels):
+        """
+        logits: shape (b, seq, vocab)
+        labels: shape (b, seq)
+        output: shape (b, seq)
+        """
+        b, s, v = logits.shape
+        # convert to prob
+        probs = torch.nn.functional.softmax(logits, dim=-1)  # (b, s, v)
+        # gather correct label
+        labels_ = labels.clone()
+        mask = (labels_ == -100)
+        labels_[mask] = 0
+        # shape => (b*s, v)
+        flat_probs = probs.view(b*s, v)
+        gather_ = torch.gather(flat_probs, 1, labels_.view(-1,1)).squeeze(-1) # (b*s)
+        gather_ = gather_.view(b, s)
+        gather_[mask] = 0.0
+        return gather_
 
 
 @add_start_docstrings(

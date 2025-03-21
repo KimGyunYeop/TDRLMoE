@@ -15,7 +15,7 @@ from transformers import (
     TrainerCallback,
     AutoConfig,
 )
-from base_GPT2 import GPT2LMHeadModel  # MOE 관련 함수 to_moe() 포함
+from Custom_MoE_GPT import GPT2LMHeadModel  # MOE 관련 함수 to_moe() 포함
 # from transformers import GPT2LMHeadModel
 # nltk 문장 토크나이저 다운로드 (없으면)
 try:
@@ -50,6 +50,19 @@ def parse_args():
     parser.add_argument("--gen_max_length", type=int, default=128, help="Maximum generation length")
     parser.add_argument("--gen_no_repeat_ngram_size", type=int, default=5, help="No repeat ngram size")
     parser.add_argument("--gen_num_beams", type=int, default=6, help="Number of beams for generation")
+    
+    # RL 관련 인자들
+    parser.add_argument("--do_RL", action="store_true", default=False, help="Use Reinforcement Learning")
+    parser.add_argument("--RL_expert_change_ratio", type=float, default=0.1, help="Expert change ratio")
+    parser.add_argument("--RL_sample_num", type=int, default=4, help="Number of samples for RL")
+    parser.add_argument("--RL_loss_coef", type=float, default=1.0, help="RL loss coefficient")
+    parser.add_argument("--RL_sample_stretegy", type=str, default="multinomial", help="RL sample strategy", choices=["multinomial", "random"])
+    parser.add_argument("--RL_base_logit_type", type=str, default="top1", help="RL base logit type", choices=["top1", "mean"])
+    parser.add_argument("--RL_reward_stretegy", type=str, default="static", help="RL reward strategy", choices=["minus", "static", "positive", "clamp"])
+    parser.add_argument("--use_sample_lm_loss", action="store_true", default=True, help="Use sample LM loss in RL")
+    parser.add_argument("--RL_start_epoch", type=int, default=0)
+    parser.add_argument("--RL_algo", default="ppo", help="RL type", choices=["reinforce", "ppo"])
+    parser.add_argument("--RL_ppo_eps", type=float, default=0.2, help="RL PPO epsilon")
     return parser.parse_args()
 
 class CustomTrainer(Trainer):
@@ -60,7 +73,9 @@ class CustomTrainer(Trainer):
         for loss_name in [
             "lm_loss", 
             "z_loss", 
-            "aux_loss"
+            "aux_loss",
+            "rl_loss",
+            "sample_lm_loss"
         ]:
             val = getattr(outputs, loss_name, None)
             if val is not None:
@@ -107,6 +122,30 @@ class TestEvaluationCallback(TrainerCallback):
         wandb.log({f"test_{k}": v for k, v in test_metrics.items()})
         return control
 
+# ---------------------------------------------------------
+# RL Activation Callback: 각 에폭 시작 시 RL_start_epoch 기준으로 RL 활성화 여부 결정
+# ---------------------------------------------------------
+class RLActivationCallback(TrainerCallback):
+    def __init__(self, do_RL, RL_start_epoch):
+        self.do_RL = do_RL
+        self.RL_start_epoch = RL_start_epoch
+
+    def on_epoch_begin(self, args, state, control, **kwargs):
+        # 모델 인스턴스 가져오기 (kwargs 또는 self.trainer에서)
+        model = kwargs.get("model")
+        if model is None and hasattr(self, "trainer"):
+            model = self.trainer.model
+        if self.do_RL:
+            if state.epoch >= self.RL_start_epoch:
+                model.config.do_RL = True
+                model.do_RL = True
+                print(f"Epoch {state.epoch:.2f}: RL 활성화 (config.do_RL={model.config.do_RL}, do_RL={model.do_RL})")
+            else:
+                model.config.do_RL = False
+                model.do_RL = False
+                print(f"Epoch {state.epoch:.2f}: RL 비활성화 (do_RL={model.config.do_RL}, do_RL={model.do_RL})")
+        return control
+    
 def tokenize_function(examples, tokenizer):
     # 각 텍스트를 토큰화 (truncation만 적용)
     return tokenizer(examples["text"], truncation=True)
@@ -168,6 +207,8 @@ def main():
     # 모델 및 MOE 설정
     model_config = AutoConfig.from_pretrained(args.model_name)
     moe_config = AutoConfig.from_pretrained(args.moe_config_path)
+    
+    # MOE 관련 설정 추가
     model_config.num_experts = moe_config.num_experts
     model_config.expert_capacity = moe_config.expert_capacity
     model_config.router_bias = moe_config.router_bias
@@ -176,6 +217,20 @@ def main():
     model_config.router_ignore_padding_tokens = moe_config.router_ignore_padding_tokens
     model_config.router_z_loss_coef = moe_config.router_z_loss_coef
     model_config.router_aux_loss_coef = moe_config.router_aux_loss_coef
+    
+    # RL 관련 설정 추가
+    model_config.do_RL = args.do_RL
+    model_config.RL_expert_change_ratio = args.RL_expert_change_ratio
+    model_config.RL_sample_num = args.RL_sample_num
+    model_config.RL_loss_coef = args.RL_loss_coef
+    model_config.RL_sample_stretegy = args.RL_sample_stretegy
+    model_config.RL_base_logit_type = args.RL_base_logit_type
+    model_config.RL_reward_stretegy = args.RL_reward_stretegy
+    model_config.use_sample_lm_loss = args.use_sample_lm_loss
+    model_config.RL_start_epoch = args.RL_start_epoch
+    model_config.RL_algo = args.RL_algo
+    model_config.RL_ppo_eps = args.RL_ppo_eps
+    print(model_config)
 
     model = GPT2LMHeadModel.from_pretrained(
         pretrained_model_name_or_path=args.model_name,
@@ -184,6 +239,18 @@ def main():
     )
     model.to_moe()  # MOE 적용 (사용자 정의 함수)
     print(model)
+
+
+    # 초기 RL 상태는 RL_start_epoch에 따라 설정 (첫 에폭 시작 전 설정)
+    if args.do_RL and 0 >= args.RL_start_epoch:
+        model.config.do_RL = True
+        model.do_RL = True
+        print("초기 RL 활성화")
+    else:
+        model.config.do_RL = False
+        model.do_RL = False
+        print("초기 RL 비활성화")
+
 
     data_collator = DataCollatorForLanguageModeling(
         tokenizer=tokenizer, mlm=False, pad_to_multiple_of=8
@@ -225,6 +292,7 @@ def main():
         compute_metrics=compute_metrics,
     )
 
+    trainer.add_callback(RLActivationCallback(args.do_RL, args.RL_start_epoch))
     test_callback = TestEvaluationCallback(test_dataset, compute_metrics, tokenizer, task, output_dir)
     test_callback.trainer = trainer
     trainer.add_callback(test_callback)
