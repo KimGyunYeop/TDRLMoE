@@ -11,6 +11,7 @@ from transformers import (
     Seq2SeqTrainingArguments,
     Seq2SeqTrainer,
     TrainerCallback,
+    AutoConfig,
 )
 from base_GPT2 import GPT2LMheadModel
 import os
@@ -103,13 +104,16 @@ def parse_args():
         description="Train baseline Switch Transformer on multiple tasks with Seq2SeqTrainer"
     )
     # 모델 및 데이터 관련 인자
-    parser.add_argument("--model_name", type=str, default="google/switch-base-16", help="HuggingFace model identifier")
+    parser.add_argument("--model_name", type=str, default="gpt2", help="HuggingFace model identifier")
     parser.add_argument(
         "--dataset_name", 
         type=str, 
-        default="samsum", 
+        default="wikitext-2", 
         help="Dataset name to load"
     )
+    
+    parser.add_argument("--moe_config_path", type=str, default="google/switch-base-8", help="switch_transformer_config")
+    
     # 학습 하이퍼파라미터
     parser.add_argument("--num_train_epochs", type=int, default=10, help="Number of training epochs")
     parser.add_argument("--learning_rate", type=float, default=5e-5, help="Learning rate")
@@ -168,8 +172,31 @@ def main():
     # 3. 모델 및 토크나이저 로드 (baseline Switch Transformer)
     # ------------------------------
     tokenizer = AutoTokenizer.from_pretrained(args.model_name)
-    model = GPT2LMheadModel.from_pretrained(args.model_name, device_map="auto")
+    
+    
+    # --------------------------
+    # MOE 적용
+    # --------------------------
+    model_config = AutoConfig.from_pretrained(args.model_name)
+    moe_config = AutoConfig.from_pretrained(args.moe_config_path)
+    model_config.num_experts = moe_config.num_experts
+    model_config.expert_capacity = moe_config.expert_capacity
+    model_config.reorder_and_upcast_attn = moe_config.reorder_and_upcast_attn
+    model_config.router_bias = moe_config.router_bias
+    model_config.router_jitter_noise = moe_config.router_jitter_noise
+    model_config.router_dtype = moe_config.router_dtype
+    model_config.router_ignore_padding_tokens = moe_config.router_ignore_padding_tokens
+    model_config.router_z_loss_coef = moe_config.router_z_loss_coef
+    model_config.router_aux_loss_coef = moe_config.router_aux_loss_coef
+    
+    model = GPT2LMheadModel.from_pretrained(
+        pretrained_model_name_or_path=args.model_name,
+        config=model_config,
+        device_map="auto"
+    )
     model.to_moe()
+    
+    print(model)
     
     # ---------------------------------------------------------
     # 전처리 함수 및 평가 지표 (태스크별)
