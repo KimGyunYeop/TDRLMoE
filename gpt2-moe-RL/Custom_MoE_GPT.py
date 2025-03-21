@@ -528,10 +528,10 @@ class GPT2Top1Router(nn.Module):
         
         #delete fix here for gpt2 pre-trained like result at initalization
         # Mask tokens outside expert capacity. Sum over each sequence
-        token_priority = torch.cumsum(expert_index, dim=-2)
-        # mask if the token routed to to the expert will overflow
-        expert_capacity_mask = token_priority <= self.expert_capacity
-        expert_index = expert_index * expert_capacity_mask
+        # token_priority = torch.cumsum(expert_index, dim=-2)
+        # # mask if the token routed to to the expert will overflow
+        # expert_capacity_mask = token_priority <= self.expert_capacity
+        # expert_index = expert_index * expert_capacity_mask
 
         # router_probs = torch.max(router_probs, dim=-1).values.unsqueeze(-1)
         return expert_index, router_probs, router_logits
@@ -1776,11 +1776,11 @@ class GPT2LMHeadModel(GPT2PreTrainedModel, GenerationMixin):
                     ).squeeze(-1)  # -> shape(b, seq)
                     
                     if self.RL_algo == "ppo":
-                        baseline_logs =  torch.nn.functional.softmax(decoder_outputs.router_probs[k][0], dim=-1)
+                        baseline_logs =  torch.nn.functional.softmax(transformer_outputs.router_probs[k][0], dim=-1)
                         baseline_logs =  torch.gather(
                             baseline_logs, 
                             -1, 
-                            decoder_outputs.router_probs[k][1].unsqueeze(-1)
+                            transformer_outputs.router_probs[k][1].unsqueeze(-1)
                         ).squeeze(-1)
                         baseline_logs = torch.log(baseline_logs + 1e-12).to(baseline_probs.device)
     
