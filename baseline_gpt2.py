@@ -189,6 +189,7 @@ def main():
     )
 
     def compute_metrics(eval_preds):
+        print(eval_preds)
         eval_loss = eval_preds.metrics.get("eval_loss")
         perplexity = math.exp(eval_loss) if eval_loss is not None else None
         return {"perplexity": perplexity}
@@ -209,7 +210,8 @@ def main():
         seed=args.seed,
         fp16=args.fp16,
         save_total_limit=3,
-        eval_accumulation_steps=1,
+        # eval_accumulation_steps=5,
+        prediction_loss_only=True
     )
 
     trainer = CustomTrainer(
