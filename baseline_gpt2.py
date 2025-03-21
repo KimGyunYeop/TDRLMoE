@@ -33,8 +33,8 @@ def parse_args():
     parser.add_argument("--moe_config_path", type=str, default="google/switch-base-8", help="switch_transformer_config")
     
     # 학습 하이퍼파라미터
-    parser.add_argument("--num_train_epochs", type=int, default=10, help="Number of training epochs")
-    parser.add_argument("--learning_rate", type=float, default=5e-5, help="Learning rate")
+    parser.add_argument("--num_train_epochs", type=int, default=15, help="Number of training epochs")
+    parser.add_argument("--learning_rate", type=float, default=1e-5, help="Learning rate")
     parser.add_argument("--per_device_train_batch_size", type=int, default=8, help="Batch size per device during training")
     parser.add_argument("--accumulation_steps", type=int, default=None, help="Gradient accumulation steps")
     parser.add_argument("--per_device_eval_batch_size", type=int, default=8, help="Batch size per device during evaluation")
