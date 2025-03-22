@@ -124,17 +124,14 @@ def parse_args():
 # === QA 전용 전처리 및 후처리 함수 추가 ===
 
 def preprocess_function_qa_train(examples):
-    # 학습 시 단순 토큰화 (후처리에 필요한 정보는 평가용에만 필요)
     inputs = ["question: " + q + " context: " + c for q, c in zip(examples["question"], examples["context"])]
     targets = [ans["text"][0] if len(ans["text"]) > 0 else "" for ans in examples["answers"]]
     model_inputs = tokenizer(inputs, max_length=384, truncation=True)
-    with tokenizer.as_target_tokenizer():
-        labels = tokenizer(targets, max_length=30, truncation=True)
-    model_inputs["labels"] = labels["input_ids"]
+    labels = tokenizer(text_target=targets, max_length=30, truncation=True, padding="max_length")["input_ids"]
+    model_inputs["labels"] = labels
     return model_inputs
 
 def preprocess_function_qa_eval(examples):
-    # 평가 시 offset mapping 및 overflow 정보를 포함하여 여러 청크를 반환
     inputs = ["question: " + q + " context: " + c for q, c in zip(examples["question"], examples["context"])]
     targets = [ans["text"][0] if len(ans["text"]) > 0 else "" for ans in examples["answers"]]
     model_inputs = tokenizer(
@@ -145,27 +142,29 @@ def preprocess_function_qa_eval(examples):
         return_overflowing_tokens=True,
         return_offsets_mapping=True,
     )
-    with tokenizer.as_target_tokenizer():
-        labels = tokenizer(targets, max_length=30, truncation=True, padding="max_length")
-    model_inputs["labels"] = labels["input_ids"]
-
-    # 예제 ID 및 오프셋 매핑을 저장 (여러 청크를 원본 예제에 매핑)
+    # sample_mapping: 각 청크가 원본 예제의 어느 인덱스에 해당하는지 표시
     sample_mapping = model_inputs.pop("overflow_to_sample_mapping")
     offset_mapping = model_inputs.pop("offset_mapping")
-    model_inputs["example_id"] = []
-    new_offset_mapping = []
-    for i, mapping in enumerate(offset_mapping):
-        model_inputs["example_id"].append(examples["id"][sample_mapping[i]])
-        new_offset_mapping.append(mapping)
-    model_inputs["offset_mapping"] = new_offset_mapping
+    # 각 청크에 대해 원본 예제의 레이블을 중복 생성 (토큰화 시 동일한 옵션 적용)
+    labels = []
+    for idx in sample_mapping:
+        label = tokenizer(
+            text_target=targets[idx],
+            max_length=30,
+            truncation=True,
+            padding="max_length"
+        )["input_ids"]
+        labels.append(label)
+    model_inputs["labels"] = labels
+    model_inputs["example_id"] = [examples["id"][idx] for idx in sample_mapping]
+    model_inputs["offset_mapping"] = offset_mapping
     return model_inputs
 
 def post_process_function_qa(examples, features, predictions, stage="eval"):
-    # 여기서는 모델이 text-to-text 방식으로 정답을 생성한다고 가정하고 단순 디코딩
+    # text-to-text 방식으로 생성된 정답을 디코딩합니다.
     decoded_preds = tokenizer.batch_decode(predictions, skip_special_tokens=True)
-    # SQuAD 평가 메트릭이 요구하는 형식으로 변환
+    # SQuAD 형식으로 변환: 각 예제의 id와 정답(answer)을 포함합니다.
     formatted_preds = [{"id": ex["id"], "prediction_text": pred} for ex, pred in zip(examples, decoded_preds)]
-    # 정답은 원래 예제의 answers 필드를 그대로 사용 (SQuAD 형식)
     formatted_refs = [{"id": ex["id"], "answers": ex["answers"]} for ex in examples]
     return EvalPrediction(predictions=formatted_preds, label_ids=formatted_refs)
 

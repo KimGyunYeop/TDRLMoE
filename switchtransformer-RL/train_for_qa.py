@@ -150,9 +150,8 @@ def preprocess_function_qa_train(examples):
     inputs = ["question: " + q + " context: " + c for q, c in zip(examples["question"], examples["context"])]
     targets = [ans["text"][0] if len(ans["text"]) > 0 else "" for ans in examples["answers"]]
     model_inputs = tokenizer(inputs, max_length=384, truncation=True)
-    with tokenizer.as_target_tokenizer():
-        labels = tokenizer(targets, max_length=30, truncation=True)
-    model_inputs["labels"] = labels["input_ids"]
+    labels = tokenizer(text_target=targets, max_length=30, truncation=True, padding="max_length")["input_ids"]
+    model_inputs["labels"] = labels
     return model_inputs
 
 def preprocess_function_qa_eval(examples):
@@ -166,14 +165,21 @@ def preprocess_function_qa_eval(examples):
         return_overflowing_tokens=True,
         return_offsets_mapping=True,
     )
-    with tokenizer.as_target_tokenizer():
-        labels = tokenizer(targets, max_length=30, truncation=True, padding="max_length")
-    model_inputs["labels"] = labels["input_ids"]
-
-    # 예제 ID와 offset mapping 저장 (여러 청크를 원본 예제에 매핑)
+    # sample_mapping: 각 청크가 원본 예제의 어느 인덱스에 해당하는지 표시
     sample_mapping = model_inputs.pop("overflow_to_sample_mapping")
     offset_mapping = model_inputs.pop("offset_mapping")
-    model_inputs["example_id"] = [examples["id"][i] for i in sample_mapping]
+    # 각 청크에 대해 원본 예제의 레이블을 중복 생성 (토큰화 시 동일한 옵션 적용)
+    labels = []
+    for idx in sample_mapping:
+        label = tokenizer(
+            text_target=targets[idx],
+            max_length=30,
+            truncation=True,
+            padding="max_length"
+        )["input_ids"]
+        labels.append(label)
+    model_inputs["labels"] = labels
+    model_inputs["example_id"] = [examples["id"][idx] for idx in sample_mapping]
     model_inputs["offset_mapping"] = offset_mapping
     return model_inputs
 
