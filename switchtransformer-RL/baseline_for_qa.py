@@ -360,12 +360,14 @@ def main():
             args=training_args,
             train_dataset=tokenized_dataset["train"],
             eval_dataset=tokenized_dataset["validation"],
-            eval_examples=dataset["validation"],  # 원본 예제 (후처리용)
+            # eval_examples=dataset["validation"],  # 원본 예제 (후처리용)
             tokenizer=tokenizer,
             data_collator=data_collator,
             compute_metrics=compute_metrics if task != "qa" else None,
             post_process_function=post_process_function_qa,
         )
+        
+        trainer.eval_examples = dataset["validation"]  # 평가 예제를 별도로 할당
         test_dataset = tokenized_dataset["test"]
     else:
         trainer = Seq2SeqTrainer(
