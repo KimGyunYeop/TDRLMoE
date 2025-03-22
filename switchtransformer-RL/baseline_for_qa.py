@@ -326,6 +326,7 @@ def main():
             preds, labels = eval_preds
             # -100 => pad_token_id로 치환
             preds = np.where(preds != -100, preds, tokenizer.pad_token_id)
+            labels = np.where(labels != -100, preds, tokenizer.pad_token_id)
             # 단순히 text 디코딩
             decoded_preds = [tokenizer.decode(p, skip_special_tokens=True) for p in preds]
 
