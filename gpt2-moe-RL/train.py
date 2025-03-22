@@ -17,6 +17,9 @@ from transformers import (
 )
 from Custom_MoE_GPT import GPT2LMHeadModel  # MOE 관련 함수 to_moe() 포함
 # from transformers import GPT2LMHeadModel
+    
+import torch
+
 # nltk 문장 토크나이저 다운로드 (없으면)
 try:
     nltk.download('punkt_tab')
@@ -44,7 +47,7 @@ def parse_args():
     parser.add_argument("--fp16", action="store_true", default=False, help="Use mixed precision training")
     # 기타 옵셔널 인자
     parser.add_argument("--seed", type=int, default=42, help="Random seed for reproducibility")
-    parser.add_argument("--run_name", type=str, default="baseline", help="Wandb run name")
+    parser.add_argument("--run_name", type=str, default="TEST", help="Wandb run name")
     # Generation 인자 (평가 시 사용; 여기서는 펄플렉시티 계산용으로만 존재)
     parser.add_argument("--gen_min_length", type=int, default=10, help="Minimum generation length")
     parser.add_argument("--gen_max_length", type=int, default=128, help="Maximum generation length")
@@ -111,7 +114,7 @@ class TestEvaluationCallback(TrainerCallback):
         if int(state.epoch) % 5 != 0:
             return control
 
-        eval_results = self.trainer.evaluate(self.test_dataset)
+        eval_results = self.trainer.evaluate(self.test_dataset, prediction_loss_only=True)
         eval_loss = eval_results.get("eval_loss")
         perplexity = math.exp(eval_loss) if eval_loss is not None else None
         test_metrics = {"perplexity": perplexity}
@@ -120,6 +123,9 @@ class TestEvaluationCallback(TrainerCallback):
             json.dump({k: round(v, 4) for k, v in test_metrics.items()}, f, indent=4)
         print("Evaluation results:", test_metrics)
         wandb.log({f"test_{k}": v for k, v in test_metrics.items()})
+        
+        torch.cuda.empty_cache()
+        
         return control
 
 # ---------------------------------------------------------
@@ -270,7 +276,7 @@ def main():
         per_device_train_batch_size=args.per_device_train_batch_size,
         per_device_eval_batch_size=args.per_device_eval_batch_size,
         num_train_epochs=args.num_train_epochs,
-        weight_decay=0.1,
+        weight_decay=0.01,
         logging_steps=args.logging_steps,
         save_steps=args.save_steps,
         report_to=["wandb"],

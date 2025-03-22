@@ -1827,8 +1827,8 @@ class GPT2LMHeadModel(GPT2PreTrainedModel, GenerationMixin):
             
         decoder_z_loss = None
         decoder_aux_loss = None
-        rl_loss = None
         sample_lm_loss = None
+        decoder_rl_loss = None
         
         
         if output_router_logits:
@@ -1853,7 +1853,14 @@ class GPT2LMHeadModel(GPT2PreTrainedModel, GenerationMixin):
                 sample_lm_loss_fct = CrossEntropyLoss(ignore_index=-100)
                 sample_lm_loss = None
                 for bl in branch_logits_list:
-                    sll = sample_lm_loss_fct(bl.view(-1, lm_logits.size(-1)), labels.view(-1))
+                    # sll = sample_lm_loss_fct(bl.view(-1, lm_logits.size(-1)), labels.view(-1))
+                    
+                    sll = self.loss_function(
+                        bl,
+                        labels,
+                        vocab_size=self.config.vocab_size,
+                        **kwargs,
+                    )
                     if sample_lm_loss is None:
                         sample_lm_loss = sll
                     else:
@@ -1871,7 +1878,7 @@ class GPT2LMHeadModel(GPT2PreTrainedModel, GenerationMixin):
             z_loss=z_loss,
             aux_loss=aux_loss,
             logits=lm_logits,
-            rl_loss=rl_loss,
+            rl_loss=decoder_rl_loss,
             sample_lm_loss=sample_lm_loss,
             past_key_values=transformer_outputs.past_key_values,
             hidden_states=transformer_outputs.hidden_states,

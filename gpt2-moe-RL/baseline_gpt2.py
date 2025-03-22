@@ -203,7 +203,7 @@ def main():
         per_device_train_batch_size=args.per_device_train_batch_size,
         per_device_eval_batch_size=args.per_device_eval_batch_size,
         num_train_epochs=args.num_train_epochs,
-        weight_decay=0.1,
+        weight_decay=0.01,
         logging_steps=args.logging_steps,
         save_steps=args.save_steps,
         report_to=["wandb"],
