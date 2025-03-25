@@ -224,7 +224,7 @@ def main():
     elif args.mode == "share":
         model = SwitchTransformersForConditionalGeneration.from_pretrained(args.model_name, device_map="auto")
         model.make_share_expert()
-        
+    print(model)
     
     # ---------------------------------------------------------
     # 전처리 함수 및 평가 지표 (태스크별)

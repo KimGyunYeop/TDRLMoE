@@ -294,6 +294,7 @@ def main():
         config=model_config,
         device_map="auto"
     )
+    print(model)
 
     # 초기 RL 상태는 RL_start_epoch에 따라 설정 (첫 에폭 시작 전 설정)
     if args.do_RL and 0 >= args.RL_start_epoch:
