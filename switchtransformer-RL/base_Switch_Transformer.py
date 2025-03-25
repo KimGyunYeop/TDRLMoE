@@ -503,6 +503,10 @@ class SwitchTransformersLayerFF(nn.Module):
     def make_share_expert(self):
         if self.is_sparse:
             self.share_expert = copy.deepcopy(getattr(self.mlp.experts, "expert_{}".format(0)))
+            
+    def to_dense(self):
+        if self.is_sparse:
+            self.mlp = copy.deepcopy(getattr(self.mlp.experts, "expert_{}".format(0)))
 
     def forward(self, hidden_states, output_router_logits):
         forwarded_states = self.layer_norm(hidden_states)
@@ -1651,6 +1655,10 @@ class SwitchTransformersModel(SwitchTransformersPreTrainedModel):
     def make_share_expert(self):
         for i in range(len(self.decoder.block)):
             self.decoder.block[i].layer[-1].make_share_expert()
+            
+    def to_dense(self):
+        for i in range(len(self.decoder.block)):
+            self.decoder.block[i].layer[-1].to_dense()
 
     @add_start_docstrings_to_model_forward(SWITCH_TRANSFORMERS_INPUTS_DOCSTRING)
     @replace_return_docstrings(output_type=Seq2SeqMoEModelOutput, config_class=_CONFIG_FOR_DOC)

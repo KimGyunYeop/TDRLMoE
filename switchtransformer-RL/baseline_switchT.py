@@ -209,7 +209,10 @@ def main():
     tokenizer = AutoTokenizer.from_pretrained(args.model_name)
     if args.mode == "base":
         model = SwitchTransformersForConditionalGeneration.from_pretrained(args.model_name, device_map="auto")
-    elif args.mode == "dense":
+    if args.mode == "dense":
+        model = SwitchTransformersForConditionalGeneration.from_pretrained(args.model_name, device_map="auto")
+        model.to_dense()
+    elif args.mode == "t5":
         if "base" in args.model_name:
             model = T5ForConditionalGeneration.from_pretrained("t5-base", device_map="auto")
         elif "large" in args.model_name:
