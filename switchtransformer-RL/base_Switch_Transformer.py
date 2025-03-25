@@ -151,7 +151,6 @@ class SwitchTransformersConfig(PretrainedConfig):
         use_cache=True,
         pad_token_id=0,
         eos_token_id=1,
-        mode="base",#added
         **kwargs,
     ):
         self.vocab_size = vocab_size
@@ -201,8 +200,6 @@ class SwitchTransformersConfig(PretrainedConfig):
         self.router_z_loss_coef = router_z_loss_coef
         self.router_aux_loss_coef = router_aux_loss_coef
         self.dense_act_fn = dense_act_fn
-        
-        self.mode = mode
 
         super().__init__(
             pad_token_id=pad_token_id,
@@ -502,6 +499,10 @@ class SwitchTransformersLayerFF(nn.Module):
 
         self.layer_norm = SwitchTransformersLayerNorm(config.d_model, eps=config.layer_norm_epsilon)
         self.dropout = nn.Dropout(config.dropout_rate)
+        
+    def make_share_expert(self):
+        if self.is_sparse:
+            self.share_expert = copy.deepcopy(getattr(self.mlp.experts, "expert_{}".format(0)))
 
     def forward(self, hidden_states, output_router_logits):
         forwarded_states = self.layer_norm(hidden_states)
@@ -512,6 +513,10 @@ class SwitchTransformersLayerFF(nn.Module):
         else:
             router_tuple = None
 
+        if hasattr(self, "share_expert"):
+            share_forward_states = self.share_expert(hidden_states)
+            forwarded_states = (share_forward_states + forwarded_states) / 2
+        
         output = hidden_states + self.dropout(forwarded_states)
 
         if output_router_logits and router_tuple is not None:
@@ -1642,6 +1647,10 @@ class SwitchTransformersModel(SwitchTransformersPreTrainedModel):
         """
         for layer, heads in heads_to_prune.items():
             self.encoder.layer[layer].attention.prune_heads(heads)
+            
+    def make_share_expert(self):
+        for i in range(len(self.decoder.block)):
+            self.decoder.block[i].layer[-1].make_share_expert()
 
     @add_start_docstrings_to_model_forward(SWITCH_TRANSFORMERS_INPUTS_DOCSTRING)
     @replace_return_docstrings(output_type=Seq2SeqMoEModelOutput, config_class=_CONFIG_FOR_DOC)
@@ -1792,8 +1801,6 @@ class SwitchTransformersForConditionalGeneration(SwitchTransformersPreTrainedMod
 
         self.router_z_loss_coef = config.router_z_loss_coef
         self.router_aux_loss_coef = config.router_aux_loss_coef
-        
-        self.mode = config.mode
 
         # Initialize weights and apply final processing
         self.post_init()
@@ -1825,6 +1832,10 @@ class SwitchTransformersForConditionalGeneration(SwitchTransformersPreTrainedMod
 
     def get_decoder(self):
         return self.decoder
+
+    def make_share_expert(self):
+        for i in range(len(self.decoder.block)):
+            self.decoder.block[i].layer[-1].make_share_expert()
 
     @add_start_docstrings_to_model_forward(SWITCH_TRANSFORMERS_INPUTS_DOCSTRING)
     @replace_return_docstrings(output_type=Seq2SeqMoEOutput, config_class=_CONFIG_FOR_DOC)

@@ -15,7 +15,6 @@ from transformers import (
     TrainerCallback,
     AutoConfig,
 )
-from base_GPT2 import GPT2LMHeadModel  # MOE 관련 함수 to_moe() 포함
 # from transformers import GPT2LMHeadModel
 # nltk 문장 토크나이저 다운로드 (없으면)
 try:
@@ -50,6 +49,8 @@ def parse_args():
     parser.add_argument("--gen_max_length", type=int, default=128, help="Maximum generation length")
     parser.add_argument("--gen_no_repeat_ngram_size", type=int, default=5, help="No repeat ngram size")
     parser.add_argument("--gen_num_beams", type=int, default=6, help="Number of beams for generation")
+    
+    parser.add_argument("--mode", type=str, default="base", choices=["base", "dense", "share"], help="Switch Transformer mode")
     return parser.parse_args()
 
 class CustomTrainer(Trainer):
@@ -177,12 +178,30 @@ def main():
     model_config.router_z_loss_coef = moe_config.router_z_loss_coef
     model_config.router_aux_loss_coef = moe_config.router_aux_loss_coef
 
-    model = GPT2LMHeadModel.from_pretrained(
-        pretrained_model_name_or_path=args.model_name,
-        config=model_config,
-        device_map="auto",
-    )
-    model.to_moe()  # MOE 적용 (사용자 정의 함수)
+    if args.mode == "base":
+        from base_GPT2 import GPT2LMHeadModel  # MOE 관련 함수 to_moe() 포함
+        model = GPT2LMHeadModel.from_pretrained(
+            pretrained_model_name_or_path=args.model_name,
+            config=model_config,
+            device_map="auto",
+        )
+        model.to_moe()  # MOE 적용 (사용자 정의 함수)
+    elif args.mode == "dense":
+        from transformers import GPT2LMHeadModel
+        model = GPT2LMHeadModel.from_pretrained(
+            pretrained_model_name_or_path=args.model_name,
+            config=model_config,
+            device_map="auto",
+        )
+    elif args.mode == "share":
+        model = GPT2LMHeadModel.from_pretrained(
+            pretrained_model_name_or_path=args.model_name,
+            config=model_config,
+            device_map="auto",
+        )
+        model.to_moe()  # MOE 적용 (사용자 정의 함수)
+        model.make_share_expert()
+        
     print(model)
 
     data_collator = DataCollatorForLanguageModeling(
@@ -198,14 +217,14 @@ def main():
     training_args = TrainingArguments(
         output_dir=output_dir,
         evaluation_strategy="steps",
-        eval_steps=len(train_dataset) // (args.per_device_train_batch_size * 2),
+        eval_steps=len(train_dataset),
         learning_rate=args.learning_rate,
         per_device_train_batch_size=args.per_device_train_batch_size,
         per_device_eval_batch_size=args.per_device_eval_batch_size,
         num_train_epochs=args.num_train_epochs,
         weight_decay=0.01,
         logging_steps=args.logging_steps,
-        save_steps=args.save_steps,
+        save_steps=len(train_dataset),
         report_to=["wandb"],
         run_name=args.run_name,
         seed=args.seed,

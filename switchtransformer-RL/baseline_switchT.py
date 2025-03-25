@@ -11,8 +11,9 @@ from transformers import (
     Seq2SeqTrainingArguments,
     Seq2SeqTrainer,
     TrainerCallback,
+    T5ForConditionalGeneration,
 )
-from base_Switch_Transformer import SwitchTransformersForConditionalGeneration
+from base_Switch_Transformer import SwitchTransformersForConditionalGeneration, SwitchTransformersConfig
 import os
 import torch
 import math
@@ -129,7 +130,9 @@ def parse_args():
     parser.add_argument("--gen_no_repeat_ngram_size", type=int, default=5, help="No repeat ngram size")
     parser.add_argument("--gen_num_beams", type=int, default=6, help="Number of beams for generation")
     # source_prefix 인자 추가 (summarization 전처리 시 사용)
-    parser.add_argument("--source_prefix", type=str, default="summarize: ", help="Source prefix to prepend to input text for summarization")
+    parser.add_argument("--source_prefix", type=str, default=None, help="Source prefix to prepend to input text for summarization")
+    
+    parser.add_argument("--mode", type=str, default="base", choices=["base", "dense", "share"], help="Switch Transformer mode")
     return parser.parse_args()
 
 def main():
@@ -204,7 +207,21 @@ def main():
     # 3. 모델 및 토크나이저 로드 (baseline Switch Transformer)
     # ------------------------------
     tokenizer = AutoTokenizer.from_pretrained(args.model_name)
-    model = SwitchTransformersForConditionalGeneration.from_pretrained(args.model_name, device_map="auto")
+    if args.mode == "base":
+        model = SwitchTransformersForConditionalGeneration.from_pretrained(args.model_name, device_map="auto")
+    elif args.mode == "dense":
+        if "base" in args.model_name:
+            model = T5ForConditionalGeneration.from_pretrained("t5-base", device_map="auto")
+        elif "large" in args.model_name:
+            model = T5ForConditionalGeneration.from_pretrained("t5-large", device_map="auto")
+        elif "xxl" in args.model_name:
+            model = T5ForConditionalGeneration.from_pretrained("t5-xxl", device_map="auto")
+        else:
+            raise ValueError("Dense expert model not found.")
+    elif args.mode == "share":
+        model = SwitchTransformersForConditionalGeneration.from_pretrained(args.model_name, device_map="auto")
+        model.make_share_expert()
+        
     
     # ---------------------------------------------------------
     # 전처리 함수 및 평가 지표 (태스크별)
@@ -387,7 +404,7 @@ def main():
     # 7. Training Arguments 설정
     # ------------------------------
     # eval_steps를 1 epoch당 두 번 평가하도록 동적으로 계산 (train split 길이에 따라)
-    eval_steps = len(tokenized_dataset["train"]) // (args.per_device_train_batch_size * 2)
+    eval_steps = len(tokenized_dataset["train"])
     training_args = Seq2SeqTrainingArguments(
         output_dir=output_dir,
         evaluation_strategy="steps",
@@ -398,13 +415,13 @@ def main():
         num_train_epochs=args.num_train_epochs,
         weight_decay=0.1,
         logging_steps=args.logging_steps,
-        save_steps=args.save_steps,
+        save_steps=eval_steps,
         predict_with_generate=True,
         report_to=["wandb"],
         run_name=args.run_name,
         seed=args.seed,
         fp16=args.fp16,
-        save_total_limit=3,
+        save_total_limit=5,
         load_best_model_at_end=True,               # 베스트 모델 자동 불러오기 활성화
         metric_for_best_model=best_metric,          # 평가 지표 지정
         greater_is_better=False                     # 낮은 eval_loss가 좋은 모델임을 지정

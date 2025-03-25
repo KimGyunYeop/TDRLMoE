@@ -478,7 +478,7 @@ def main():
     # ---------------------------------------------------------
     # 1에폭에 두 번씩 eval 수행하도록 eval_steps 설정
     # ---------------------------------------------------------
-    eval_steps = len(tokenized_dataset["train"]) // (args.per_device_train_batch_size * 2)
+    eval_steps = len(tokenized_dataset["train"])
 
     # ---------------------------------------------------------
     # Training Arguments 설정
@@ -493,7 +493,7 @@ def main():
         num_train_epochs=args.num_train_epochs,
         weight_decay=0.1,
         logging_steps=args.logging_steps,
-        save_steps=args.save_steps,
+        save_steps=eval_steps,
         predict_with_generate=True,
         report_to=["wandb"],
         run_name=args.run_name,

@@ -756,6 +756,7 @@ class GPT2MLP(nn.Module):
         return hidden_states
 
 
+
 class GPT2Block(nn.Module):
     def __init__(self, config, layer_idx=None):
         super().__init__()
@@ -792,8 +793,11 @@ class GPT2Block(nn.Module):
         import copy
         self.experts = nn.ModuleDict()
         for idx in range(self.config.num_experts):
-            self.experts[f"expert_{idx}"] = copy.deepcopy(self.mlp)
-            # self.experts[f"expert_{idx}"].to(self.mlp.device)
+            if self.layer_idx > 1 and self.layer_idx % 2 == 0:
+                self.is_sparse = True
+                self.experts[f"expert_{idx}"] = copy.deepcopy(self.mlp)
+            else:
+                self.is_sparse = False
             
         del self.mlp
 
@@ -807,7 +811,6 @@ class GPT2Block(nn.Module):
         encoder_attention_mask: Optional[torch.FloatTensor] = None,
         use_cache: Optional[bool] = False,
         output_attentions: Optional[bool] = False,
-        current_change_map=None,
     ) -> Union[Tuple[torch.Tensor], Optional[Tuple[torch.Tensor, Tuple[torch.FloatTensor, ...]]]]:
         residual = hidden_states
         hidden_states = self.ln_1(hidden_states)
@@ -849,34 +852,34 @@ class GPT2Block(nn.Module):
         residual = hidden_states
         hidden_states = self.ln_2(hidden_states)
         
-        
-        router_mask, router_probs, router_logits = self.router(hidden_states, current_change_map)
-        
-        expert_index = torch.argmax(router_mask, dim=-1)
+        if self.is_sparse:
+            router_mask, router_probs, router_logits = self.router(hidden_states)
+            
+            expert_index = torch.argmax(router_mask, dim=-1)
 
-        # The routers introduced might not always map all the tokens, to a router, which means that some hidden states
-        # can be unchanged from one layer to another. That is why the hidden states are cloned before updating only the seleced ones.
+            # The routers introduced might not always map all the tokens, to a router, which means that some hidden states
+            # can be unchanged from one layer to another. That is why the hidden states are cloned before updating only the seleced ones.
 
-        next_states = hidden_states.clone()
+            next_states = hidden_states.clone()
 
-        router_mask = router_mask.bool()
-        batch_size, seq_len, num_experts = router_mask.shape
-        idx_mask = router_mask.reshape(batch_size * seq_len, num_experts).sum(dim=0)
-        idx_mask = torch.nonzero(idx_mask, as_tuple=True)[
-            0
-        ].tolist()  # length: number of "activated" expert / value: index
-        for idx in idx_mask:
-            next_states[router_mask[:, :, idx]] = getattr(self.experts, "expert_{}".format(idx))(
-                hidden_states[router_mask[:, :, idx]]
-            )
+            router_mask = router_mask.bool()
+            batch_size, seq_len, num_experts = router_mask.shape
+            idx_mask = router_mask.reshape(batch_size * seq_len, num_experts).sum(dim=0)
+            idx_mask = torch.nonzero(idx_mask, as_tuple=True)[
+                0
+            ].tolist()  # length: number of "activated" expert / value: index
+            for idx in idx_mask:
+                next_states[router_mask[:, :, idx]] = getattr(self.experts, "expert_{}".format(idx))(
+                    hidden_states[router_mask[:, :, idx]]
+                )
 
-        # feed_forward_hidden_states = router_probs * next_states
-        feed_forward_hidden_states = next_states #without router_probs scaling
-        
-        router_tuple = (router_logits, expert_index)
-        # return hidden_states, (router_logits, expert_index)
-    
-        # feed_forward_hidden_states = self.mlp(hidden_states)
+            # feed_forward_hidden_states = router_probs * next_states
+            feed_forward_hidden_states = next_states #without router_probs scaling
+            
+            router_tuple = (router_logits, expert_index)
+        else:
+            feed_forward_hidden_states = self.mlp(hidden_states)
+            router_tuple = (torch.zeros((1,), device=feed_forward_hidden_states.device, dtype=torch.int64),)
         # residual connection
         hidden_states = residual + feed_forward_hidden_states
 
