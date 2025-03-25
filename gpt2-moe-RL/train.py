@@ -317,8 +317,8 @@ def main():
     results_file = os.path.join(output_dir, f"final_results.json")
     with open(results_file, "w") as f:
         json.dump({k: round(v, 4) for k, v in test_metrics.items()}, f, indent=4)
-    print("Evaluation results:", test_metrics)
-    wandb.log({f"test_{k}": v for k, v in test_metrics.items()})
+    print("Best Model Evaluation results:", test_metrics)
+    wandb.log({f"best_test_{k}": v for k, v in test_metrics.items()})
 
 
 if __name__ == "__main__":
