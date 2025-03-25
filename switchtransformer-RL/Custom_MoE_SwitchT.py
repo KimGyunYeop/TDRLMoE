@@ -2212,7 +2212,7 @@ class SwitchTransformersForConditionalGeneration(SwitchTransformersPreTrainedMod
                         baseline_logs =  torch.gather(
                             baseline_logs, 
                             -1, 
-                            brp[k][1].unsqueeze(-1)
+                            decoder_outputs.router_probs[k][1].unsqueeze(-1)
                         ).squeeze(-1)
                         baseline_logs = torch.log(baseline_logs + 1e-12).to(baseline_probs.device)
     
@@ -2228,7 +2228,6 @@ class SwitchTransformersForConditionalGeneration(SwitchTransformersPreTrainedMod
                             rl_loss_i = torch.tensor(0.0, device=reward.device)
                         else:
                             rl_loss_i = (-torch.min(ratio * reward, cliped_ratio * reward) * change_map_tensor).sum() / change_tokens_count
-                        # rl_loss_i = -torch.min(ratio * reward, cliped_ratio * reward).mean()
                         
                     elif self.RL_algo == "reinforce":
                         logp = torch.log(chosen_prob + 1e-12).to(baseline_probs.device)  # -> shape(b, seq)

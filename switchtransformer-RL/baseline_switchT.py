@@ -230,6 +230,7 @@ def main():
             return inputs
 
         rouge_metric = evaluate.load("rouge")
+        best_metric = "rouge2"
         def compute_metrics(eval_preds):
             preds, labels = eval_preds
             if isinstance(preds, tuple):
@@ -279,6 +280,7 @@ def main():
             return inputs
 
         nlu_metric = evaluate.load("accuracy")
+        best_metric = "accuracy"
         def compute_metrics(eval_preds):
             preds, labels = eval_preds
             if isinstance(preds, tuple):
@@ -311,6 +313,7 @@ def main():
 
 
         qa_metric = evaluate.load("squad")
+        best_metric = "f1"
         # def compute_metrics(eval_preds):
         #     preds, labels = eval_preds
         #     if isinstance(preds, tuple):
@@ -351,6 +354,7 @@ def main():
             return model_inputs
 
         translation_metric = evaluate.load("sacrebleu")
+        best_metric = "bleu"
         def compute_metrics(eval_preds):
             preds, labels = eval_preds
             if isinstance(preds, tuple):
@@ -401,6 +405,9 @@ def main():
         seed=args.seed,
         fp16=args.fp16,
         save_total_limit=3,
+        load_best_model_at_end=True,               # 베스트 모델 자동 불러오기 활성화
+        metric_for_best_model=best_metric,          # 평가 지표 지정
+        greater_is_better=False                     # 낮은 eval_loss가 좋은 모델임을 지정
     )
 
     # Generation 인자 딕셔너리 생성

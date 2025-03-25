@@ -328,6 +328,7 @@ def main():
             inputs["labels"] = labels["input_ids"]
             return inputs
 
+        best_metric = "rouge2"
         rouge_metric = evaluate.load("rouge")
         def compute_metrics(eval_preds):
             preds, labels = eval_preds
@@ -378,6 +379,7 @@ def main():
             return inputs
 
         nlu_metric = evaluate.load("accuracy")
+        best_metric = "accuracy"
         def compute_metrics(eval_preds):
             preds, labels = eval_preds
             if isinstance(preds, tuple):
@@ -409,6 +411,7 @@ def main():
             return model_inputs
 
         qa_metric = evaluate.load("squad")
+        best_metric = "f1"
         # def compute_metrics(eval_preds):
         #     preds, labels = eval_preds
         #     if isinstance(preds, tuple):
@@ -496,7 +499,10 @@ def main():
         run_name=args.run_name,
         seed=args.seed,
         fp16=args.fp16,
-        save_total_limit=1
+        save_total_limit=1,
+        load_best_model_at_end=True,               # 베스트 모델 자동 불러오기 활성화
+        metric_for_best_model=best_metric,          # 평가 지표 지정
+        greater_is_better=False                     # 낮은 eval_loss가 좋은 모델임을 지정
     )
 
     # Generation 인자 딕셔너리 생성
@@ -522,46 +528,45 @@ def main():
     test_callback.trainer = trainer  # trainer 인스턴스를 직접 할당
     trainer.add_callback(test_callback)
 
-
     # ---------------------------------------------------------
     # 모델 학습 및 평가
     # ---------------------------------------------------------
     trainer.train()
     trainer.save_model(output_dir)
     
-    # # 최종 테스트 예측 시 generation 인자 전달
-    # test_results = trainer.predict(tokenized_dataset["test"], **generation_kwargs)
-    # predictions = test_results.predictions
-    # labels = test_results.label_ids
+    # 최종 테스트 예측 시 generation 인자 전달
+    test_results = trainer.predict(tokenized_dataset["test"], **generation_kwargs)
+    predictions = test_results.predictions
+    labels = test_results.label_ids
 
-    # if task in ["summarization", "qa", "nlu", "translation"]:
-    #     preds = np.where(predictions != -100, predictions, tokenizer.pad_token_id)
-    #     labels = np.where(labels != -100, labels, tokenizer.pad_token_id)
-    #     decoded_preds = tokenizer.batch_decode(preds, skip_special_tokens=True)
-    #     decoded_labels = tokenizer.batch_decode(labels, skip_special_tokens=True)
-    #     # postprocessing 적용: 문장 단위 줄바꿈
-    #     decoded_preds, decoded_labels, _, _ = postprocess_text(decoded_preds, decoded_labels)
-    # elif task in ["text_generation"]:
-    #     decoded_preds = tokenizer.batch_decode(predictions, skip_special_tokens=True)
-    #     decoded_labels = tokenizer.batch_decode(labels, skip_special_tokens=True)
+    if task in ["summarization", "qa", "nlu", "translation"]:
+        preds = np.where(predictions != -100, predictions, tokenizer.pad_token_id)
+        labels = np.where(labels != -100, labels, tokenizer.pad_token_id)
+        decoded_preds = tokenizer.batch_decode(preds, skip_special_tokens=True)
+        decoded_labels = tokenizer.batch_decode(labels, skip_special_tokens=True)
+        # postprocessing 적용: 문장 단위 줄바꿈
+        decoded_preds, decoded_labels, _, _ = postprocess_text(decoded_preds, decoded_labels)
+    elif task in ["text_generation"]:
+        decoded_preds = tokenizer.batch_decode(predictions, skip_special_tokens=True)
+        decoded_labels = tokenizer.batch_decode(labels, skip_special_tokens=True)
 
-    # if task == "text_generation":
-    #     eval_loss = test_results.metrics.get("eval_loss")
-    #     perplexity = math.exp(eval_loss) if eval_loss is not None else None
-    #     final_metrics = {"perplexity": perplexity}
-    # else:
-    #     final_metrics = compute_metrics((predictions, labels))
+    if task == "text_generation":
+        eval_loss = test_results.metrics.get("eval_loss")
+        perplexity = math.exp(eval_loss) if eval_loss is not None else None
+        final_metrics = {"perplexity": perplexity}
+    else:
+        final_metrics = compute_metrics((predictions, labels))
     
-    # sample_list = []
-    # for pred, gold in zip(decoded_preds, decoded_labels):
-    #     sample_list.append({"prediction": pred, "gold": gold})
-    # with open(os.path.join(output_dir, "pred_gold_samples.json"), "w", encoding="utf-8") as f:
-    #     json.dump(sample_list, f, indent=4, ensure_ascii=False)
+    sample_list = []
+    for pred, gold in zip(decoded_preds, decoded_labels):
+        sample_list.append({"prediction": pred, "gold": gold})
+    with open(os.path.join(output_dir, "pred_gold_samples.json"), "w", encoding="utf-8") as f:
+        json.dump(sample_list, f, indent=4, ensure_ascii=False)
     
-    # results_file = os.path.join(output_dir, f"{task}_switch_results.json")
-    # with open(results_file, "w") as f:
-    #     json.dump({k: round(v, 4) for k, v in final_metrics.items()}, f, indent=4)
-    # print("Model and results saved.")
+    results_file = os.path.join(output_dir, f"{task}_switch_results.json")
+    with open(results_file, "w") as f:
+        json.dump({k: round(v, 4) for k, v in final_metrics.items()}, f, indent=4)
+    print("Model and results saved.")
 
 if __name__ == "__main__":
     main()
