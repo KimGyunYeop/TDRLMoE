@@ -475,14 +475,11 @@ def main():
     if "test" not in tokenized_dataset.keys():
         tokenized_dataset["test"] = tokenized_dataset["validation"]
         
-    # ---------------------------------------------------------
-    # 1에폭에 두 번씩 eval 수행하도록 eval_steps 설정
-    # ---------------------------------------------------------
-    eval_steps = len(tokenized_dataset["train"])
 
     # ---------------------------------------------------------
     # Training Arguments 설정
     # ---------------------------------------------------------
+    eval_steps = len(tokenized_dataset["train"]) // (args.per_device_train_batch_size)
     training_args = Seq2SeqTrainingArguments(
         output_dir=output_dir,
         evaluation_strategy="steps",

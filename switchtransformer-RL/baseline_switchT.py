@@ -404,7 +404,7 @@ def main():
     # 7. Training Arguments 설정
     # ------------------------------
     # eval_steps를 1 epoch당 두 번 평가하도록 동적으로 계산 (train split 길이에 따라)
-    eval_steps = len(tokenized_dataset["train"])
+    eval_steps = len(tokenized_dataset["train"]) // (args.per_device_train_batch_size)
     training_args = Seq2SeqTrainingArguments(
         output_dir=output_dir,
         evaluation_strategy="steps",
