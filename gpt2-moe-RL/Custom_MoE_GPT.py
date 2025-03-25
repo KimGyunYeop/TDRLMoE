@@ -795,7 +795,7 @@ class GPT2Block(nn.Module):
         import copy
         self.experts = nn.ModuleDict()
         for idx in range(self.config.num_experts):
-            if self.layer_idx > 1 and self.layer_idx % 2 == 0:
+            if self.layer_idx > 0 and (self.layer_idx+1) % 2 == 0:
                 self.is_sparse = True
                 self.experts[f"expert_{idx}"] = copy.deepcopy(self.mlp)
             else:

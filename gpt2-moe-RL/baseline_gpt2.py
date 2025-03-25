@@ -94,7 +94,7 @@ class TestEvaluationCallback(TrainerCallback):
         print(f"Epoch {state.epoch} train end")
         print("#" * 50)
         # 매 5 에폭마다 평가 수행
-        if int(state.epoch) % 5 != 0:
+        if int(state.epoch) % int(args.num_train_epochs/3) != 0:
             return control
 
         eval_results = self.trainer.predict(self.test_dataset)
