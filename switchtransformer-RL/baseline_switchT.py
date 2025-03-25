@@ -424,7 +424,7 @@ def main():
         save_total_limit=5,
         load_best_model_at_end=True,               # 베스트 모델 자동 불러오기 활성화
         metric_for_best_model=best_metric,          # 평가 지표 지정
-        greater_is_better=False                     # 낮은 eval_loss가 좋은 모델임을 지정
+        greater_is_better=True                     # 낮은 eval_loss가 좋은 모델임을 지정
     )
 
     # Generation 인자 딕셔너리 생성
@@ -494,8 +494,10 @@ def main():
     results_file = os.path.join(output_dir, f"{task}_switch_results.json")
     with open(results_file, "w") as f:
         json.dump({k: round(v, 4) for k, v in final_metrics.items()}, f, indent=4)
-    
     print("Model and results saved.")
+    
+    print(f"Test metrics at epoch of Best Model: {final_metrics}")
+    wandb.log({f"best_test_{k}": v for k, v in final_metrics.items()})
 
 if __name__ == "__main__":
     main()
