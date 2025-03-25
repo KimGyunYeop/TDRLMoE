@@ -129,7 +129,7 @@ def main():
     task = "text_generation"
     args.task = task
 
-    exp_name = f"{args.dataset_name}-{args.model_name.replace('/', '-')}-{task}-{args.num_train_epochs}epochs"
+    exp_name = f"{args.dataset_name}-{args.model_name.replace('/', '-')}-{task}-{args.num_train_epochs}epochs_final"
     output_dir = os.path.join("results", exp_name, args.run_name)
     os.makedirs(output_dir, exist_ok=True)
     wandb.init(project=exp_name, name=args.run_name)

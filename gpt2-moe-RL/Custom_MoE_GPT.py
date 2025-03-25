@@ -783,6 +783,7 @@ class GPT2Block(nn.Module):
         #     self.experts[f"expert_{idx}"] = copy.deepcopy(self.mlp)
         #     # self.experts[f"expert_{idx}"].to(self.mlp.device)
         
+    
     def to_moe(self):
         # # self.mlp의 학습된 파라미터들을 가져옵니다.
         # mlp_state = self.mlp.state_dict()
@@ -803,6 +804,11 @@ class GPT2Block(nn.Module):
         if self.is_sparse:
             del self.mlp
         
+    def make_share_expert(self):
+        import copy
+        if self.is_sparse:
+            self.share_expert = copy.deepcopy(getattr(self.experts, "expert_{}".format(0)))
+
     def forward(
         self,
         hidden_states: Optional[Tuple[torch.FloatTensor]],
@@ -813,6 +819,7 @@ class GPT2Block(nn.Module):
         encoder_attention_mask: Optional[torch.FloatTensor] = None,
         use_cache: Optional[bool] = False,
         output_attentions: Optional[bool] = False,
+        current_change_map=None,
     ) -> Union[Tuple[torch.Tensor], Optional[Tuple[torch.Tensor, Tuple[torch.FloatTensor, ...]]]]:
         residual = hidden_states
         hidden_states = self.ln_1(hidden_states)
@@ -855,7 +862,7 @@ class GPT2Block(nn.Module):
         hidden_states = self.ln_2(hidden_states)
         
         if self.is_sparse:
-            router_mask, router_probs, router_logits = self.router(hidden_states)
+            router_mask, router_probs, router_logits = self.router(hidden_states, current_change_map)
             
             expert_index = torch.argmax(router_mask, dim=-1)
 
@@ -879,9 +886,12 @@ class GPT2Block(nn.Module):
             feed_forward_hidden_states = next_states #without router_probs scaling
             
             router_tuple = (router_logits, expert_index)
+            # return hidden_states, (router_logits, expert_index)
         else:
             feed_forward_hidden_states = self.mlp(hidden_states)
             router_tuple = (torch.zeros((1,), device=feed_forward_hidden_states.device, dtype=torch.int64),)
+        
+            # feed_forward_hidden_states = self.mlp(hidden_states)
         # residual connection
         hidden_states = residual + feed_forward_hidden_states
 
