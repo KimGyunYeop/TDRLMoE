@@ -490,6 +490,7 @@ class SwitchTransformersLayerFF(nn.Module):
     def __init__(self, config: SwitchTransformersConfig, is_sparse=False):
         super().__init__()
         self.is_sparse = is_sparse
+        self.config = config
 
         # Check if it is a sparse layer, if not then it is a dense layer
         if not self.is_sparse:
@@ -502,7 +503,8 @@ class SwitchTransformersLayerFF(nn.Module):
         
     def make_share_expert(self):
         if self.is_sparse:
-            self.share_expert = copy.deepcopy(getattr(self.mlp.experts, "expert_{}".format(0)))
+            self.share_expert = SwitchTransformersDenseActDense(self.config)
+            self.share_expert.to(self.mlp.experts.expert_0.wi.weight.device)
             
     def to_dense(self):
         if self.is_sparse:

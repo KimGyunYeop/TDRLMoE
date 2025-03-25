@@ -124,7 +124,6 @@ class TestEvaluationCallback(TrainerCallback):
         print("Evaluation results:", test_metrics)
         wandb.log({f"test_{k}": v for k, v in test_metrics.items()})
         
-        torch.cuda.empty_cache()
         
         return control
 
@@ -277,7 +276,7 @@ def main():
         per_device_train_batch_size=args.per_device_train_batch_size,
         per_device_eval_batch_size=args.per_device_eval_batch_size,
         num_train_epochs=args.num_train_epochs,
-        weight_decay=0.01,
+        weight_decay=0.1,
         logging_steps=args.logging_steps,
         save_steps=eval_steps,
         report_to=["wandb"],
