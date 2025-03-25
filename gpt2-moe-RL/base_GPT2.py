@@ -732,6 +732,8 @@ class GPT2Block(nn.Module):
         self.mlp = GPT2MLP(inner_dim, config)
         self.router = GPT2Top1Router(self.config)
         
+        self.layer_idx = layer_idx
+        
         # import copy
         # self.experts = nn.ModuleDict()
         # for idx in range(self.config.num_experts):
@@ -755,13 +757,14 @@ class GPT2Block(nn.Module):
                 self.experts[f"expert_{idx}"] = copy.deepcopy(self.mlp)
             else:
                 self.is_sparse = False
-            
-        del self.mlp
+        
+        if self.is_sparse:
+            del self.mlp
         
     def make_share_expert(self):
         import copy
         if self.is_sparse:
-            self.share_expert = copy.deepcopy(getattr(self.mlp.experts, "expert_{}".format(0)))
+            self.share_expert = copy.deepcopy(getattr(self.experts, "expert_{}".format(0)))
 
     def forward(
         self,
@@ -1404,6 +1407,9 @@ class GPT2Model(GPT2PreTrainedModel):
                 for k, v in self.device_map.items():
                     if i == v[-1] and "cuda:" + str(k) != self.last_device:
                         hidden_states = hidden_states.to("cuda:" + str(k + 1))
+                        
+            if output_router_logits:
+                all_router_probs = all_router_probs + (router_probs,)
 
         hidden_states = self.ln_f(hidden_states)
 
@@ -1412,8 +1418,6 @@ class GPT2Model(GPT2PreTrainedModel):
         if output_hidden_states:
             all_hidden_states = all_hidden_states + (hidden_states,)
             
-        if output_router_logits:
-            all_router_probs = all_router_probs + (router_probs,)
 
         if not return_dict:
             return tuple(

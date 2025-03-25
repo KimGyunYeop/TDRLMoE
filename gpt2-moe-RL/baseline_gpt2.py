@@ -194,6 +194,7 @@ def main():
             device_map="auto",
         )
     elif args.mode == "share":
+        from base_GPT2 import GPT2LMHeadModel  # MOE 관련 함수 to_moe() 포함
         model = GPT2LMHeadModel.from_pretrained(
             pretrained_model_name_or_path=args.model_name,
             config=model_config,
