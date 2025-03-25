@@ -1815,6 +1815,7 @@ class SwitchTransformersForConditionalGeneration(SwitchTransformersPreTrainedMod
 
         # Model parallel
         self.device_map = None
+        self.is_decoder_all_dense = False
 
     def get_input_embeddings(self):
         return self.shared
@@ -1848,6 +1849,8 @@ class SwitchTransformersForConditionalGeneration(SwitchTransformersPreTrainedMod
     def to_dense(self):
         for i in range(len(self.decoder.block)):
             self.decoder.block[i].layer[-1].to_dense()
+        
+        self.is_decoder_all_dense = True
 
     @add_start_docstrings_to_model_forward(SWITCH_TRANSFORMERS_INPUTS_DOCSTRING)
     @replace_return_docstrings(output_type=Seq2SeqMoEOutput, config_class=_CONFIG_FOR_DOC)
@@ -1983,7 +1986,7 @@ class SwitchTransformersForConditionalGeneration(SwitchTransformersPreTrainedMod
                 encoder_z_loss = 0
                 encoder_aux_loss = 0
 
-            if self.decoder.config.decoder_sparse_step > 1:
+            if self.decoder.config.decoder_sparse_step > 1 and not self.is_decoder_all_dense:
                 decoder_router_logits, decoder_expert_indexes = self._unpack_router_logits(decoder_outputs[-1], device=lm_logits.device)
                 decoder_z_loss = router_z_loss_func(decoder_router_logits)
                 decoder_router_probs = nn.Softmax(dim=-1)(decoder_router_logits)
