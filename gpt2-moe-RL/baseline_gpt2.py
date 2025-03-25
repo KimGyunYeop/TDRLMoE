@@ -98,7 +98,7 @@ class TestEvaluationCallback(TrainerCallback):
             return control
 
         eval_results = self.trainer.predict(self.test_dataset)
-        eval_loss = eval_results.get("eval_loss")
+        eval_loss = eval_results.loss
         perplexity = math.exp(eval_loss) if eval_loss is not None else None
         test_metrics = {"perplexity": perplexity}
         results_file = os.path.join(self.output_dir, f"{state.epoch}_results.json")
@@ -215,22 +215,23 @@ def main():
         perplexity = math.exp(eval_loss) if eval_loss is not None else None
         return {"perplexity": perplexity}
 
+    eval_steps = len(train_dataset) // (args.per_device_train_batch_size)
     training_args = TrainingArguments(
         output_dir=output_dir,
         evaluation_strategy="steps",
-        eval_steps=len(train_dataset),
+        eval_steps=eval_steps,
         learning_rate=args.learning_rate,
         per_device_train_batch_size=args.per_device_train_batch_size,
         per_device_eval_batch_size=args.per_device_eval_batch_size,
         num_train_epochs=args.num_train_epochs,
         weight_decay=0.01,
         logging_steps=args.logging_steps,
-        save_steps=len(train_dataset),
+        save_steps=eval_steps,
         report_to=["wandb"],
         run_name=args.run_name,
         seed=args.seed,
         fp16=args.fp16,
-        save_total_limit=3,
+        save_total_limit=5,
         # eval_accumulation_steps=5,
         prediction_loss_only=True,
         load_best_model_at_end=True,               # 베스트 모델 자동 불러오기 활성화
@@ -256,7 +257,7 @@ def main():
     trainer.save_model(output_dir)
     
     eval_results = trainer.predict(test_dataset)
-    eval_loss = eval_results.get("eval_loss")
+    eval_loss = eval_results.loss
     perplexity = math.exp(eval_loss) if eval_loss is not None else None
     test_metrics = {"perplexity": perplexity}
     results_file = os.path.join(output_dir, f"final_results.json")
