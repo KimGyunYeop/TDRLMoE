@@ -94,11 +94,11 @@ class TestEvaluationCallback(TrainerCallback):
         print(f"Epoch {state.epoch} train end")
         print("#" * 50)
         # 매 5 에폭마다 평가 수행
-        if int(state.epoch) % int(args.num_train_epochs/3) != 0:
+        if int(state.epoch) % 5 != 0:
             return control
 
         eval_results = self.trainer.predict(self.test_dataset)
-        eval_loss = eval_results.loss
+        eval_loss = eval_results.metrics.get("test_loss")
         perplexity = math.exp(eval_loss) if eval_loss is not None else None
         test_metrics = {"perplexity": perplexity}
         results_file = os.path.join(self.output_dir, f"{state.epoch}_results.json")
@@ -257,7 +257,7 @@ def main():
     trainer.save_model(output_dir)
     
     eval_results = trainer.predict(test_dataset)
-    eval_loss = eval_results.loss
+    eval_loss = eval_results.metrics.get("test_loss")
     perplexity = math.exp(eval_loss) if eval_loss is not None else None
     test_metrics = {"perplexity": perplexity}
     results_file = os.path.join(output_dir, f"final_results.json")
