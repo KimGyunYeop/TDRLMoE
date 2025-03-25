@@ -2212,7 +2212,7 @@ class SwitchTransformersForConditionalGeneration(SwitchTransformersPreTrainedMod
                         baseline_logs =  torch.gather(
                             baseline_logs, 
                             -1, 
-                            decoder_outputs.router_probs[k][1].unsqueeze(-1)
+                            brp[k][1].unsqueeze(-1)
                         ).squeeze(-1)
                         baseline_logs = torch.log(baseline_logs + 1e-12).to(baseline_probs.device)
     
