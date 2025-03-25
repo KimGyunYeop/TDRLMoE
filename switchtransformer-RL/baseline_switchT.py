@@ -161,7 +161,7 @@ def main():
     if not hasattr(args, "source_prefix") or args.source_prefix is None:
         args.source_prefix = default_prefix
 
-    exp_name = f"{args.dataset_name}-{args.model_name.replace('/', '-')}-{task}-{args.num_train_epochs}epochs"
+    exp_name = f"{args.dataset_name}-{args.model_name.replace('/', '-')}-{task}-{args.num_train_epochs}epochs_final"
     output_dir = os.path.join("results", exp_name, args.run_name)
     os.makedirs(output_dir, exist_ok=True)
 

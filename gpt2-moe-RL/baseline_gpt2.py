@@ -93,10 +93,10 @@ class TestEvaluationCallback(TrainerCallback):
         print(f"Epoch {state.epoch} train end")
         print("#" * 50)
         # 매 5 에폭마다 평가 수행
-        if int(state.epoch) % 5 != 0:
+        if int(state.epoch) % int(args.num_train_epochs/3) != 0:
             return control
 
-        eval_results = self.trainer.evaluate(self.test_dataset)
+        eval_results = self.trainer.predict(self.test_dataset)
         eval_loss = eval_results.get("eval_loss")
         perplexity = math.exp(eval_loss) if eval_loss is not None else None
         test_metrics = {"perplexity": perplexity}
@@ -212,7 +212,10 @@ def main():
         fp16=args.fp16,
         save_total_limit=3,
         # eval_accumulation_steps=5,
-        prediction_loss_only=True
+        prediction_loss_only=True,
+        load_best_model_at_end=True,               # 베스트 모델 자동 불러오기 활성화
+        metric_for_best_model="eval_loss",          # 평가 지표 지정
+        greater_is_better=False                     # 낮은 eval_loss가 좋은 모델임을 지정
     )
 
     trainer = CustomTrainer(
@@ -231,6 +234,16 @@ def main():
 
     trainer.train()
     trainer.save_model(output_dir)
+    
+    eval_results = trainer.predict(test_dataset)
+    eval_loss = eval_results.get("eval_loss")
+    perplexity = math.exp(eval_loss) if eval_loss is not None else None
+    test_metrics = {"perplexity": perplexity}
+    results_file = os.path.join(output_dir, f"final_results.json")
+    with open(results_file, "w") as f:
+        json.dump({k: round(v, 4) for k, v in test_metrics.items()}, f, indent=4)
+    print("Evaluation results:", test_metrics)
+    wandb.log({f"test_{k}": v for k, v in test_metrics.items()})
 
 if __name__ == "__main__":
     main()
