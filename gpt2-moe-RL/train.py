@@ -17,7 +17,7 @@ from transformers import (
 )
 from Custom_MoE_GPT import GPT2LMHeadModel  # MOE 관련 함수 to_moe() 포함
 # from transformers import GPT2LMHeadModel
-    
+
 import torch
 
 # nltk 문장 토크나이저 다운로드 (없으면)
@@ -43,7 +43,7 @@ def parse_args():
     parser.add_argument("--accumulation_steps", type=int, default=None, help="Gradient accumulation steps")
     parser.add_argument("--per_device_eval_batch_size", type=int, default=4, help="Batch size per device during evaluation")
     parser.add_argument("--save_steps", type=int, default=500, help="Save checkpoint every X update steps")
-    parser.add_argument("--logging_steps", type=int, default=10, help="Log every X update steps")
+    parser.add_argument("--logging_steps", type=int, default=100, help="Log every X update steps")
     parser.add_argument("--fp16", action="store_true", default=False, help="Use mixed precision training")
     # 기타 옵셔널 인자
     parser.add_argument("--seed", type=int, default=42, help="Random seed for reproducibility")
@@ -61,7 +61,7 @@ def parse_args():
     parser.add_argument("--RL_loss_coef", type=float, default=1.0, help="RL loss coefficient")
     parser.add_argument("--RL_sample_stretegy", type=str, default="multinomial", help="RL sample strategy", choices=["multinomial", "random"])
     parser.add_argument("--RL_base_logit_type", type=str, default="top1", help="RL base logit type", choices=["top1", "mean"])
-    parser.add_argument("--RL_reward_stretegy", type=str, default="static", help="RL reward strategy", choices=["minus", "static", "positive", "clamp"])
+    parser.add_argument("--RL_reward_stretegy", type=str, default="static", help="RL reward strategy", choices=["minus", "static", "positive", "clamp", "log"])
     parser.add_argument("--use_sample_lm_loss", action="store_true", default=True, help="Use sample LM loss in RL")
     parser.add_argument("--RL_start_epoch", type=int, default=0)
     parser.add_argument("--RL_algo", default="ppo", help="RL type", choices=["reinforce", "ppo"])
@@ -71,22 +71,22 @@ def parse_args():
 class CustomTrainer(Trainer):
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         outputs = model(**inputs)
-        loss = outputs.loss if outputs.loss is not None else outputs[0]
+        if model.training:
+            loss = outputs.loss if outputs.loss is not None else outputs[0]
+        else:
+            # 평가 시에는 LM loss만 사용하여 perplexity 계산
+            lm_loss = getattr(outputs, "lm_loss", None)
+            loss = lm_loss
+        
         log_dict = {}
-        for loss_name in [
-            "lm_loss", 
-            "z_loss", 
-            "aux_loss",
-            "rl_loss",
-            "sample_lm_loss"
-        ]:
+        for loss_name in ["lm_loss", "z_loss", "aux_loss", "rl_loss", "sample_lm_loss"]:
             val = getattr(outputs, loss_name, None)
             if val is not None:
                 log_dict[loss_name] = val.detach().float().mean().item()
         if self.state.global_step % self.args.logging_steps == 0:
             self.log(log_dict)
         return (loss, outputs) if return_outputs else loss
-
+    
 def postprocess_text(preds, labels):
     str_preds = [pred.strip() for pred in preds]
     str_labels = [label.strip() for label in labels]

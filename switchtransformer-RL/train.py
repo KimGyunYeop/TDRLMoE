@@ -178,7 +178,7 @@ def parse_args():
     parser.add_argument("--RL_loss_coef", type=float, default=1.0, help="RL loss coefficient")
     parser.add_argument("--RL_sample_stretegy", type=str, default="multinomial", help="RL sample strategy", choices=["multinomial", "random"])
     parser.add_argument("--RL_base_logit_type", type=str, default="top1", help="RL base logit type", choices=["top1", "mean"])
-    parser.add_argument("--RL_reward_stretegy", type=str, default="minus", help="RL reward strategy", choices=["minus", "static", "positive", "clamp"])
+    parser.add_argument("--RL_reward_stretegy", type=str, default="minus", help="RL reward strategy", choices=["minus", "static", "positive", "clamp", "log"])
     parser.add_argument("--use_sample_lm_loss", action="store_true", default=False, help="Use sample LM loss in RL")
     parser.add_argument("--RL_start_epoch", type=int, default=0)
     parser.add_argument("--RL_algo", default="reinforce", help="RL type", choices=["reinforce", "ppo"])

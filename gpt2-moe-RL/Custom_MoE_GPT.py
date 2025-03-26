@@ -1769,17 +1769,23 @@ class GPT2LMHeadModel(GPT2PreTrainedModel, GenerationMixin):
             for bl, brp in zip(branch_logits_list, router_probs_list):
                 p_branch = self._compute_label_probs(bl, labels)
                 
-                # (2) reward => (b, seq)
-                reward = p_branch - baseline_probs.detach()
-                
                 if self.RL_reward_stretegy == "static":
+                    # (2) reward => (b, seq)
+                    reward = p_branch - baseline_probs.detach()
                     reward = reward.sign()
                 elif self.RL_reward_stretegy == "minus":
-                    reward = reward
+                    # (2) reward => (b, seq)
+                    reward = p_branch - baseline_probs.detach()
                 elif self.RL_reward_stretegy == "positive":
+                    # (2) reward => (b, seq)
+                    reward = p_branch - baseline_probs.detach()
                     reward = reward.clamp(0, 1)
                 elif self.RL_reward_stretegy == "clamp":
+                    # (2) reward => (b, seq)
+                    reward = p_branch - baseline_probs.detach()
                     reward = reward.clamp(-1, 1)
+                elif self.RL_reward_stretegy == "log":
+                    reward = torch.log(p_branch + 1e-12) - torch.log(baseline_probs.detach() + 1e-12)
                 
                 for k in range(len(brp)):
                     if len(brp[k][0]) <= 1:
