@@ -58,8 +58,9 @@ class CustomQuestionAnsweringSeq2SeqTrainer(QuestionAnsweringSeq2SeqTrainer):
 # TestEvaluationCallback 수정 (5 에폭마다 평가 및 generation 인자 전달, postprocessing 적용)
 # ---------------------------------------------------------
 class TestEvaluationCallback(TrainerCallback):
-    def __init__(self, test_dataset, compute_metrics, tokenizer, task, generation_kwargs, output_dir="results"):
+    def __init__(self, test_dataset, dataset, compute_metrics, tokenizer, task, generation_kwargs, output_dir="results"):
         self.test_dataset = test_dataset
+        self.dataset = dataset
         self.compute_metrics = compute_metrics
         self.tokenizer = tokenizer
         self.task = task
@@ -83,7 +84,7 @@ class TestEvaluationCallback(TrainerCallback):
         #     return control
 
         # predict 호출 시 generation 인자 전달
-        test_results = self.trainer.predict(self.test_dataset, **self.generation_kwargs)
+        test_results = self.trainer.predict(self.test_dataset, self.dataset, **self.generation_kwargs)
         test_metrics = test_results.metrics
         
         results_file = os.path.join(self.output_dir, f"{state.epoch}_switch_results.json")
@@ -312,9 +313,10 @@ def main():
     tokenized_dataset["train"] = dataset["train"].map(preprocess_function, batched=True, remove_columns=dataset["train"].column_names, num_proc=8)
     tokenized_dataset["validation"] = dataset["validation"].map(preprocess_validation_function, batched=True, remove_columns=dataset["validation"].column_names, num_proc=8)
     
-    if "test" in tokenized_dataset.keys():
+    if "test" in dataset.keys():
         tokenized_dataset["test"] = dataset["test"].map(preprocess_validation_function, batched=True, remove_columns=dataset["test"].column_names, num_proc=8)
     else:
+        dataset["test"] = dataset["validation"]
         tokenized_dataset["test"] = tokenized_dataset["validation"]
     
     # Post-processing:
@@ -424,7 +426,7 @@ def main():
         post_process_function=post_processing_function,
     )
     
-    test_callback = TestEvaluationCallback(tokenized_dataset["test"], compute_metrics, tokenizer, task, generation_kwargs, output_dir)
+    test_callback = TestEvaluationCallback(tokenized_dataset["test"], dataset["test"], compute_metrics, tokenizer, task, generation_kwargs, output_dir)
     test_callback.trainer = trainer  # trainer 인스턴스를 직접 할당
     trainer.add_callback(test_callback)
 
@@ -448,7 +450,7 @@ def main():
         print("Best checkpoint 정보가 없습니다.")
 
     # 테스트셋 평가 및 예측/정답 디코딩 (Generation 인자 적용)
-    test_results = trainer.predict(tokenized_dataset["test"], **generation_kwargs)
+    test_results = trainer.predict(tokenized_dataset["test"], dataset["test"] **generation_kwargs)
     final_metrics = test_results.matrics
     
     # 결과 저장

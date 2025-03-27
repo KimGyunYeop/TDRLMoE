@@ -231,9 +231,10 @@ def main():
     tokenized_dataset["train"] = dataset["train"].map(preprocess_function, batched=True, remove_columns=dataset["train"].column_names, num_proc=8)
     tokenized_dataset["validation"] = dataset["validation"].map(preprocess_validation_function, batched=True, remove_columns=dataset["validation"].column_names, num_proc=8)
     
-    if "test" in tokenized_dataset.keys():
+    if "test" in dataset.keys():
         tokenized_dataset["test"] = dataset["test"].map(preprocess_validation_function, batched=True, remove_columns=dataset["test"].column_names, num_proc=8)
     else:
+        dataset["test"] = dataset["validation"]
         tokenized_dataset["test"] = tokenized_dataset["validation"]
     
     # Post-processing:
