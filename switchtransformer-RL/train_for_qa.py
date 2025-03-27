@@ -427,6 +427,7 @@ def main():
         post_process_function=post_processing_function,
     )
     
+    trainer.add_callback(RLActivationCallback(args.do_RL, args.RL_start_epoch))
     test_callback = TestEvaluationCallback(tokenized_dataset["test"], dataset["test"], compute_metrics, tokenizer, task, generation_kwargs, output_dir)
     test_callback.trainer = trainer  # trainer 인스턴스를 직접 할당
     trainer.add_callback(test_callback)
