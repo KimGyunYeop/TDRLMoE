@@ -399,6 +399,7 @@ def main():
         seed=args.seed,
         fp16=args.fp16,
         save_total_limit=1,
+        save_safetensors=False,
         load_best_model_at_end=True,                # best model 자동 로드
         metric_for_best_model=metric_for_best_model,  # 평가 기준 metric
         greater_is_better=greater_is_better           # 평가 기준에 따른 우수 모델 결정

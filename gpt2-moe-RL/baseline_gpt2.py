@@ -237,6 +237,7 @@ def main():
         save_total_limit=5,
         # eval_accumulation_steps=5,
         prediction_loss_only=True,
+        save_safetensors=False,
         load_best_model_at_end=True,               # 베스트 모델 자동 불러오기 활성화
         metric_for_best_model="eval_loss",          # 평가 지표 지정
         greater_is_better=False                     # 낮은 eval_loss가 좋은 모델임을 지정
@@ -259,6 +260,18 @@ def main():
     trainer.train()
     trainer.save_model(output_dir)
     
+    # best checkpoint의 경로에서 global step 추출 (예: "checkpoint-1000")
+    best_checkpoint = trainer.state.best_model_checkpoint
+    if best_checkpoint is not None:
+        global_step_str = best_checkpoint.split("-")[-1]
+        best_global_step = int(global_step_str)
+        # 한 에폭 당 update step 수 계산 (batch size에 따른 step 수)
+        steps_per_epoch = len(train_dataset) // args.per_device_train_batch_size
+        best_epoch = best_global_step / steps_per_epoch
+        print(f"Best model is from approximately epoch {best_epoch:.2f}")
+    else:
+        print("Best checkpoint 정보가 없습니다.")
+
     eval_results = trainer.predict(test_dataset)
     eval_loss = eval_results.metrics.get("test_loss")
     perplexity = math.exp(eval_loss) if eval_loss is not None else None
