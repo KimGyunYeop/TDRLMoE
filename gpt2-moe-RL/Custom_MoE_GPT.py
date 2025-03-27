@@ -1767,6 +1767,7 @@ class GPT2LMHeadModel(GPT2PreTrainedModel, GenerationMixin):
                 baseline_probs = torch.stack(p_branches, dim=0).mean(dim=0)
                 
             for bl, brp in zip(branch_logits_list, router_probs_list):
+                sample_rl_losses = []
                 p_branch = self._compute_label_probs(bl, labels)
                 
                 if self.RL_reward_stretegy == "static":
@@ -1804,7 +1805,7 @@ class GPT2LMHeadModel(GPT2PreTrainedModel, GenerationMixin):
                         #     transformer_outputs.router_probs[k][1].unsqueeze(-1)
                         # ).squeeze(-1)
                         # baseline_logs = torch.log(baseline_logs + 1e-12).to(baseline_probs.device)
-    
+
                         chosen_logs = torch.log(chosen_prob + 1e-12).to(baseline_probs.device)
                         
                         ratio = torch.exp(chosen_logs - chosen_logs.detach())
@@ -1812,11 +1813,11 @@ class GPT2LMHeadModel(GPT2PreTrainedModel, GenerationMixin):
                         
                         change_map_tensor = torch.tensor(decoder_change_map[k], device=reward.device, dtype=torch.bool)
                         change_map_tensor = change_map_tensor.unsqueeze(0).expand_as(reward)
-                        change_tokens_count = (change_map_tensor == True).sum()
-                        if change_tokens_count.item() == 0:
-                            rl_loss_i = torch.tensor(0.0, device=reward.device)
+                        change_tokens_count = (change_map_tensor == True).sum(dim=-1)
+                        if change_tokens_count.sum().item() == 0:
+                            rl_loss_i = torch.tensor([0.0]*change_map_tensor.size(0), device=reward.device)
                         else:
-                            rl_loss_i = (-torch.min(ratio * reward, cliped_ratio * reward) * change_map_tensor).sum() / change_tokens_count
+                            rl_loss_i = (-torch.min(ratio * reward, cliped_ratio * reward) * change_map_tensor).sum(dim=-1) / change_tokens_count
                         # rl_loss_i = -torch.min(ratio * reward, cliped_ratio * reward).mean()
                         
                     elif self.RL_algo == "reinforce":
@@ -1824,17 +1825,18 @@ class GPT2LMHeadModel(GPT2PreTrainedModel, GenerationMixin):
                         
                         change_map_tensor = torch.tensor(decoder_change_map[k], device=reward.device, dtype=torch.bool)
                         change_map_tensor = change_map_tensor.unsqueeze(0).expand_as(reward)
-                        change_tokens_count = (change_map_tensor == True).sum()
+                        change_tokens_count = (change_map_tensor == True).sum(dim=-1)
                         
                         if change_tokens_count.item() == 0:
-                            rl_loss_i = torch.tensor(0.0, device=reward.device)
+                            rl_loss_i = torch.tensor([0.0]*change_map_tensor.size(0), device=reward.device)
                         else:
-                            rl_loss_i = -(reward * logp * change_map_tensor).sum() / change_tokens_count
+                            rl_loss_i = -(reward * logp * change_map_tensor).sum(dim=-1) / change_tokens_count
                         # rl_loss_i = -(reward * logp).mean()
                         
-                    rl_losses.append(rl_loss_i)
-                    
-            rl_loss = torch.stack(rl_losses).mean()
+                    sample_rl_losses.append(rl_loss_i)
+                rl_losses.append(torch.stack(sample_rl_losses).mean(dim=0))
+            rl_loss = torch.stack(rl_losses).mean(dim=0) #batch
+            rl_loss = rl_loss.mean() #mean of batch
         
         loss = None
         if labels is not None:
