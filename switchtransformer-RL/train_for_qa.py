@@ -14,7 +14,7 @@ from transformers import (
     TrainerCallback,
     T5ForConditionalGeneration,
 )
-from base_Switch_Transformer import SwitchTransformersForConditionalGeneration, SwitchTransformersConfig
+from Custom_MoE_SwitchT import SwitchTransformersForConditionalGeneration, SwitchTransformersConfig
 import os
 import torch
 import math
