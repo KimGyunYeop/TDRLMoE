@@ -2215,17 +2215,17 @@ class SwitchTransformersForConditionalGeneration(SwitchTransformersPreTrainedMod
                     ).squeeze(-1)  # -> shape(b, seq)
                     
                     if self.RL_algo == "ppo":
-                        baseline_logs =  torch.nn.functional.softmax(decoder_outputs.router_probs[k][0], dim=-1)
-                        baseline_logs =  torch.gather(
-                            baseline_logs, 
-                            -1, 
-                            decoder_outputs.router_probs[k][1].unsqueeze(-1)
-                        ).squeeze(-1)
-                        baseline_logs = torch.log(baseline_logs + 1e-12).to(baseline_probs.device)
+                        # baseline_logs =  torch.nn.functional.softmax(decoder_outputs.router_probs[k][0], dim=-1)
+                        # baseline_logs =  torch.gather(
+                        #     baseline_logs, 
+                        #     -1, 
+                        #     decoder_outputs.router_probs[k][1].unsqueeze(-1)
+                        # ).squeeze(-1)
+                        # baseline_logs = torch.log(baseline_logs + 1e-12).to(baseline_probs.device)
     
                         chosen_logs = torch.log(chosen_prob + 1e-12).to(baseline_probs.device)
                         
-                        ratio = torch.exp(chosen_logs - baseline_logs.detach())
+                        ratio = torch.exp(chosen_logs - chosen_logs.detach())
                         cliped_ratio = ratio.clamp(1-self.RL_ppo_eps, 1+self.RL_ppo_eps)
                         
                         change_map_tensor = torch.tensor(decoder_change_map[k], device=reward.device, dtype=torch.bool)

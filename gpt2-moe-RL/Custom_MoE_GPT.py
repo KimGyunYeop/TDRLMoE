@@ -1791,6 +1791,10 @@ class GPT2LMHeadModel(GPT2PreTrainedModel, GenerationMixin):
                     if len(brp[k][0]) <= 1:
                         continue
                     router_prob = torch.nn.functional.softmax(brp[k][0], dim=-1)
+                    print(f"reward: {reward[0]}")
+                    print(f"reward: {reward[0].shape}")
+                    print(f"router_prob: {router_prob[0]}")
+                    print(f"router_prob: {router_prob[0].shape}")
                     chosen_prob = torch.gather(
                         router_prob, 
                         -1, 
@@ -1798,17 +1802,17 @@ class GPT2LMHeadModel(GPT2PreTrainedModel, GenerationMixin):
                     ).squeeze(-1)  # -> shape(b, seq)
                     
                     if self.RL_algo == "ppo":
-                        baseline_logs =  torch.nn.functional.softmax(transformer_outputs.router_probs[k][0], dim=-1)
-                        baseline_logs =  torch.gather(
-                            baseline_logs, 
-                            -1, 
-                            transformer_outputs.router_probs[k][1].unsqueeze(-1)
-                        ).squeeze(-1)
-                        baseline_logs = torch.log(baseline_logs + 1e-12).to(baseline_probs.device)
+                        # baseline_logs =  torch.nn.functional.softmax(transformer_outputs.router_probs[k][0], dim=-1)
+                        # baseline_logs =  torch.gather(
+                        #     baseline_logs, 
+                        #     -1, 
+                        #     transformer_outputs.router_probs[k][1].unsqueeze(-1)
+                        # ).squeeze(-1)
+                        # baseline_logs = torch.log(baseline_logs + 1e-12).to(baseline_probs.device)
     
                         chosen_logs = torch.log(chosen_prob + 1e-12).to(baseline_probs.device)
                         
-                        ratio = torch.exp(chosen_logs - baseline_logs.detach())
+                        ratio = torch.exp(chosen_logs - chosen_logs.detach())
                         cliped_ratio = ratio.clamp(1-self.RL_ppo_eps, 1+self.RL_ppo_eps)
                         
                         change_map_tensor = torch.tensor(decoder_change_map[k], device=reward.device, dtype=torch.bool)
