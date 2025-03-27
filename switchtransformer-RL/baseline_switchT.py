@@ -250,7 +250,6 @@ def main():
             return inputs
 
         rouge_metric = evaluate.load("rouge")
-        best_metric = "rouge2"
         def compute_metrics(eval_preds):
             preds, labels = eval_preds
             if isinstance(preds, tuple):
@@ -300,7 +299,6 @@ def main():
             return inputs
 
         nlu_metric = evaluate.load("accuracy")
-        best_metric = "accuracy"
         def compute_metrics(eval_preds):
             preds, labels = eval_preds
             if isinstance(preds, tuple):
@@ -333,7 +331,6 @@ def main():
 
 
         qa_metric = evaluate.load("squad")
-        best_metric = "f1"
         # def compute_metrics(eval_preds):
         #     preds, labels = eval_preds
         #     if isinstance(preds, tuple):
@@ -374,7 +371,6 @@ def main():
             return model_inputs
 
         translation_metric = evaluate.load("sacrebleu")
-        best_metric = "bleu"
         def compute_metrics(eval_preds):
             preds, labels = eval_preds
             if isinstance(preds, tuple):
@@ -408,6 +404,25 @@ def main():
     # ------------------------------
     # eval_steps를 1 epoch당 두 번 평가하도록 동적으로 계산 (train split 길이에 따라)
     eval_steps = len(tokenized_dataset["train"]) // (args.per_device_train_batch_size)
+    
+    # 태스크별 best model selection 기준 설정
+    if task == "summarization":
+        metric_for_best_model = "rouge2"
+        greater_is_better = True
+    elif task == "nlu":
+        metric_for_best_model = "accuracy"
+        greater_is_better = True
+    elif task == "qa":
+        metric_for_best_model = "f1"
+        greater_is_better = True
+    elif task == "translation":
+        metric_for_best_model = "bleu"
+        greater_is_better = True
+    elif task == "text_generation":
+        # text_generation의 경우 compute_metrics가 빈 dict를 반환하므로 eval_loss를 사용합니다.
+        metric_for_best_model = "eval_loss"
+        greater_is_better = False
+        
     training_args = Seq2SeqTrainingArguments(
         output_dir=output_dir,
         evaluation_strategy="steps",
@@ -424,10 +439,10 @@ def main():
         run_name=args.run_name,
         seed=args.seed,
         fp16=args.fp16,
-        save_total_limit=5,
-        load_best_model_at_end=True,               # 베스트 모델 자동 불러오기 활성화
-        metric_for_best_model=best_metric,          # 평가 지표 지정
-        greater_is_better=True                     # 낮은 eval_loss가 좋은 모델임을 지정
+        save_total_limit=1,
+        load_best_model_at_end=True,                # best model 자동 로드
+        metric_for_best_model=metric_for_best_model,  # 평가 기준 metric
+        greater_is_better=greater_is_better           # 평가 기준에 따른 우수 모델 결정
     )
 
     # Generation 인자 딕셔너리 생성
@@ -462,6 +477,18 @@ def main():
     trainer.train()
     trainer.save_model(output_dir)
     
+    # best checkpoint의 경로에서 global step 추출 (예: "checkpoint-1000")
+    best_checkpoint = trainer.state.best_model_checkpoint
+    if best_checkpoint is not None:
+        global_step_str = best_checkpoint.split("-")[-1]
+        best_global_step = int(global_step_str)
+        # 한 에폭 당 update step 수 계산 (batch size에 따른 step 수)
+        steps_per_epoch = len(tokenized_dataset["train"]) // args.per_device_train_batch_size
+        best_epoch = best_global_step / steps_per_epoch
+        print(f"Best model is from approximately epoch {best_epoch:.2f}")
+    else:
+        print("Best checkpoint 정보가 없습니다.")
+
     # 테스트셋 평가 및 예측/정답 디코딩 (Generation 인자 적용)
     test_results = trainer.predict(tokenized_dataset["test"], **generation_kwargs)
     predictions = test_results.predictions
