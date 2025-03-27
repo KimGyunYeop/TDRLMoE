@@ -2188,21 +2188,21 @@ class SwitchTransformersForConditionalGeneration(SwitchTransformersPreTrainedMod
                 
                 if self.RL_reward_stretegy == "static":
                     # (2) reward => (b, seq)
-                    reward = p_branch - baseline_probs.detach()
+                    reward = p_branch.detach() - baseline_probs.detach()
                     reward = reward.sign()
                 elif self.RL_reward_stretegy == "minus":
                     # (2) reward => (b, seq)
-                    reward = p_branch - baseline_probs.detach()
+                    reward = p_branch.detach() - baseline_probs.detach()
                 elif self.RL_reward_stretegy == "positive":
                     # (2) reward => (b, seq)
-                    reward = p_branch - baseline_probs.detach()
+                    reward = p_branch.detach() - baseline_probs.detach()
                     reward = reward.clamp(0, 1)
                 elif self.RL_reward_stretegy == "clamp":
                     # (2) reward => (b, seq)
-                    reward = p_branch - baseline_probs.detach()
+                    reward = p_branch.detach() - baseline_probs.detach()
                     reward = reward.clamp(-1, 1)
                 elif self.RL_reward_stretegy == "log":
-                    reward = torch.log(p_branch + 1e-12) - torch.log(baseline_probs.detach() + 1e-12)
+                    reward = torch.log(p_branch.detach() + 1e-12) - torch.log(baseline_probs.detach() + 1e-12)
                 
                 for k in range(len(brp)):
                     if len(brp[k][0]) <= 1:
