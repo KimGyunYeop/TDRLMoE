@@ -451,7 +451,7 @@ def main():
         print("Best checkpoint 정보가 없습니다.")
 
     # 테스트셋 평가 및 예측/정답 디코딩 (Generation 인자 적용)
-    test_results = trainer.predict(tokenized_dataset["test"], dataset["test"] **generation_kwargs)
+    test_results = trainer.predict(tokenized_dataset["test"], dataset["test"], **generation_kwargs)
     final_metrics = test_results.matrics
     
     # 결과 저장
