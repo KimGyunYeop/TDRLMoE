@@ -61,7 +61,7 @@ class CustomTrainer(Trainer):
         else:
             # 평가 시에는 LM loss만 사용하여 perplexity 계산
             lm_loss = getattr(outputs, "lm_loss", None)
-            loss = lm_loss
+            loss = lm_loss if lm_loss is not None else outputs.loss
         
         log_dict = {}
         for loss_name in ["lm_loss", "z_loss", "aux_loss"]:
