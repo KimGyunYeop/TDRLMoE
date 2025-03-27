@@ -420,6 +420,7 @@ def main():
         args=training_args,
         train_dataset=tokenized_dataset["train"],
         eval_dataset=tokenized_dataset["validation"],
+        eval_examples=dataset["validation"],
         data_collator=data_collator,
         processing_class=tokenizer,
         compute_metrics=compute_metrics,
