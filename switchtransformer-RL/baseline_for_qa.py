@@ -29,17 +29,6 @@ try:
 except LookupError:
     nltk.download("punkt")
 
-def postprocess_text(preds, labels):
-    """
-    예측문과 정답 문장을 각각 strip한 후 nltk.sent_tokenize를 사용해 문장 단위로 분리하고,
-    각 문장 사이에 줄바꿈을 추가합니다.
-    """
-    str_preds = [pred.strip() for pred in preds]
-    str_labels = [label.strip() for label in labels]
-    preds = ["\n".join(nltk.sent_tokenize(pred)) for pred in str_preds]
-    labels = ["\n".join(nltk.sent_tokenize(label)) for label in str_labels]
-    return preds, labels, str_preds, str_labels
-
 class TestEvaluationCallback(TrainerCallback):
     def __init__(self, test_dataset, compute_metrics, tokenizer, task, generation_kwargs, output_dir="results"):
         self.test_dataset = test_dataset
@@ -67,33 +56,8 @@ class TestEvaluationCallback(TrainerCallback):
 
         # predict 호출 시 generation 인자 전달
         test_results = self.trainer.predict(self.test_dataset, **self.generation_kwargs)
-        predictions = test_results.predictions
-        labels = test_results.label_ids
-
-        if self.task in ["summarization", "qa", "nlu", "translation"]:
-            preds = np.where(predictions != -100, predictions, self.tokenizer.pad_token_id)
-            labels = np.where(labels != -100, labels, self.tokenizer.pad_token_id)
-            decoded_preds = self.tokenizer.batch_decode(preds, skip_special_tokens=True)
-            decoded_labels = self.tokenizer.batch_decode(labels, skip_special_tokens=True)
-            # postprocessing: 문장 단위 줄바꿈 적용
-            decoded_preds, decoded_labels, _, _ = postprocess_text(decoded_preds, decoded_labels)
-        elif self.task == "text_generation":
-            decoded_preds = self.tokenizer.batch_decode(predictions, skip_special_tokens=True)
-            decoded_labels = self.tokenizer.batch_decode(labels, skip_special_tokens=True)
+        test_metrics = test_results.metrics
         
-        if self.task == "text_generation":
-            eval_loss = test_results.metrics.get("eval_loss")
-            perplexity = math.exp(eval_loss) if eval_loss is not None else None
-            test_metrics = {"perplexity": perplexity}
-        else:
-            test_metrics = self.compute_metrics((predictions, labels))
-        
-        sample_list = []
-        for pred, gold in zip(decoded_preds, decoded_labels):
-            sample_list.append({"prediction": pred, "gold": gold})
-        with open(os.path.join(self.output_dir, f"pred_gold_samples_epoch{state.epoch}.json"), "w", encoding="utf-8") as f:
-            json.dump(sample_list, f, indent=4, ensure_ascii=False)
-            
         results_file = os.path.join(self.output_dir, f"{state.epoch}_switch_results.json")
         with open(results_file, "w") as f:
             json.dump({k: round(v, 4) for k, v in test_metrics.items()}, f, indent=4)
@@ -365,7 +329,9 @@ def main():
         eval_dataset=tokenized_dataset["validation"],
         tokenizer=tokenizer,
         data_collator=data_collator,
+        processing_class=tokenizer,
         compute_metrics=compute_metrics,
+        post_process_function=post_processing_function,
     )
     
     test_callback = TestEvaluationCallback(tokenized_dataset["test"], compute_metrics, tokenizer, task, generation_kwargs, output_dir)
@@ -393,34 +359,7 @@ def main():
 
     # 테스트셋 평가 및 예측/정답 디코딩 (Generation 인자 적용)
     test_results = trainer.predict(tokenized_dataset["test"], **generation_kwargs)
-    predictions = test_results.predictions
-    labels = test_results.label_ids
-
-    if task in ["summarization", "qa", "nlu"]:
-        preds = np.where(predictions != -100, predictions, tokenizer.pad_token_id)
-        labels = np.where(labels != -100, labels, tokenizer.pad_token_id)
-        decoded_preds = tokenizer.batch_decode(preds, skip_special_tokens=True)
-        decoded_labels = tokenizer.batch_decode(labels, skip_special_tokens=True)
-    elif task in ["text_generation"]:
-        decoded_preds = tokenizer.batch_decode(predictions, skip_special_tokens=True)
-        decoded_labels = tokenizer.batch_decode(labels, skip_special_tokens=True)
-
-    # Postprocessing 후 평가 (예: 문장 단위 줄바꿈 적용)
-    decoded_preds, decoded_labels, _, _ = postprocess_text(decoded_preds, decoded_labels)
-    
-    # 최종 평가 지표 계산
-    if task == "text_generation":
-        final_metrics = {}
-    else:
-        final_metrics = compute_metrics((predictions, labels))
-    
-    # 예측 및 정답 샘플 저장
-    sample_list = []
-    for pred, gold in zip(decoded_preds, decoded_labels):
-        sample_list.append({"prediction": pred, "gold": gold})
-    samples_file = os.path.join(output_dir, "pred_gold_samples.json")
-    with open(samples_file, "w", encoding="utf-8") as f:
-        json.dump(sample_list, f, indent=4, ensure_ascii=False)
+    final_metrics = test_results.matrics
     
     # 결과 저장
     results_file = os.path.join(output_dir, f"{task}_switch_results.json")
