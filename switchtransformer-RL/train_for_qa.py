@@ -158,7 +158,7 @@ def parse_args():
     parser.add_argument("--RL_ppo_eps", type=float, default=0.2, help="RL PPO epsilon")
     # Generation 인자 추가
     parser.add_argument("--gen_min_length", type=int, default=1, help="Minimum generation length")
-    parser.add_argument("--gen_max_length", type=int, default=128, help="Maximum generation length")
+    parser.add_argument("--gen_max_length", type=int, default=64, help="Maximum generation length")
     parser.add_argument("--gen_no_repeat_ngram_size", type=int, default=5, help="No repeat ngram size")
     parser.add_argument("--gen_num_beams", type=int, default=6, help="Number of beams for generation")
     # source_prefix 인자 추가 (summarization 전처리 시 사용)
@@ -229,6 +229,15 @@ def main():
         device_map="auto"
     )
     print(model)
+    
+    # We resize the embeddings only when necessary to avoid index errors. If you are creating a model from scratch
+    # on a small vocab and want a smaller embedding size, remove this test.
+    embedding_size = model.get_input_embeddings().weight.shape[0]
+    if len(tokenizer) > embedding_size:
+        model.resize_token_embeddings(len(tokenizer))
+
+    if model.config.decoder_start_token_id is None:
+        raise ValueError("Make sure that `config.decoder_start_token_id` is correctly defined")
     
     # 초기 RL 상태는 RL_start_epoch에 따라 설정 (첫 에폭 시작 전 설정)
     if args.do_RL and 0 >= args.RL_start_epoch:
@@ -409,7 +418,6 @@ def main():
         args=training_args,
         train_dataset=tokenized_dataset["train"],
         eval_dataset=tokenized_dataset["validation"],
-        tokenizer=tokenizer,
         data_collator=data_collator,
         processing_class=tokenizer,
         compute_metrics=compute_metrics,

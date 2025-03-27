@@ -94,7 +94,7 @@ def parse_args():
     parser.add_argument("--run_name", type=str, default="baseline", help="Wandb run name")
     # Generation 인자 추가
     parser.add_argument("--gen_min_length", type=int, default=1, help="Minimum generation length")
-    parser.add_argument("--gen_max_length", type=int, default=128, help="Maximum generation length")
+    parser.add_argument("--gen_max_length", type=int, default=64, help="Maximum generation length")
     parser.add_argument("--gen_no_repeat_ngram_size", type=int, default=5, help="No repeat ngram size")
     parser.add_argument("--gen_num_beams", type=int, default=6, help="Number of beams for generation")
     # source_prefix 인자 추가 (summarization 전처리 시 사용)
@@ -157,6 +157,15 @@ def main():
         model = SwitchTransformersForConditionalGeneration.from_pretrained(args.model_name, device_map="auto")
         model.make_share_expert()
     print(model)
+    
+    # We resize the embeddings only when necessary to avoid index errors. If you are creating a model from scratch
+    # on a small vocab and want a smaller embedding size, remove this test.
+    embedding_size = model.get_input_embeddings().weight.shape[0]
+    if len(tokenizer) > embedding_size:
+        model.resize_token_embeddings(len(tokenizer))
+
+    if model.config.decoder_start_token_id is None:
+        raise ValueError("Make sure that `config.decoder_start_token_id` is correctly defined")
     
     # ---------------------------------------------------------
     # 전처리 함수 및 평가 지표 (태스크별)
@@ -327,7 +336,6 @@ def main():
         args=training_args,
         train_dataset=tokenized_dataset["train"],
         eval_dataset=tokenized_dataset["validation"],
-        tokenizer=tokenizer,
         data_collator=data_collator,
         processing_class=tokenizer,
         compute_metrics=compute_metrics,
