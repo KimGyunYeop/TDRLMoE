@@ -370,7 +370,7 @@ def main():
 
     # 테스트셋 평가 및 예측/정답 디코딩 (Generation 인자 적용)
     test_results = trainer.predict(tokenized_dataset["test"], dataset["test"], **generation_kwargs)
-    final_metrics = test_results.matrics
+    final_metrics = test_results.metrics
     
     # 결과 저장
     results_file = os.path.join(output_dir, f"{task}_switch_results.json")
