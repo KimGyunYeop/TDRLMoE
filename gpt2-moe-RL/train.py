@@ -286,6 +286,7 @@ def main():
         save_total_limit=3,
         # eval_accumulation_steps=5,
         prediction_loss_only=True,
+        save_safetensors=False,
         load_best_model_at_end=True,               # 베스트 모델 자동 불러오기 활성화
         metric_for_best_model="eval_loss",          # 평가 지표 지정
         greater_is_better=False                     # 낮은 eval_loss가 좋은 모델임을 지정

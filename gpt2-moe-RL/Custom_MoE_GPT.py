@@ -774,6 +774,7 @@ class GPT2Block(nn.Module):
 
         self.mlp = GPT2MLP(inner_dim, config)
         self.router = GPT2Top1Router(self.config)
+        self.dropout = nn.Dropout(0.1)
         
         self.layer_idx = layer_idx
         
@@ -794,6 +795,7 @@ class GPT2Block(nn.Module):
         
         import copy
         self.experts = nn.ModuleDict()
+        
         for idx in range(self.config.num_experts):
             if self.layer_idx > 0 and (self.layer_idx+1) % 2 == 0:
                 self.is_sparse = True
@@ -884,6 +886,7 @@ class GPT2Block(nn.Module):
 
             # feed_forward_hidden_states = router_probs * next_states
             feed_forward_hidden_states = next_states #without router_probs scaling
+            feed_forward_hidden_states = self.dropout(feed_forward_hidden_states)
             
             router_tuple = (router_logits, expert_index)
             # return hidden_states, (router_logits, expert_index)
