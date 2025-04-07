@@ -846,7 +846,6 @@ class GPT2Block(nn.Module):
                 share_forward_states = self.share_expert(hidden_states)
                 feed_forward_hidden_states = (share_forward_states + feed_forward_hidden_states) / 2
             
-            feed_forward_hidden_states = self.dropout(feed_forward_hidden_states)
             router_tuple = (router_logits, expert_index)
         else:
             feed_forward_hidden_states = self.mlp(hidden_states)

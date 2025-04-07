@@ -886,7 +886,6 @@ class GPT2Block(nn.Module):
 
             # feed_forward_hidden_states = router_probs * next_states
             feed_forward_hidden_states = next_states #without router_probs scaling
-            feed_forward_hidden_states = self.dropout(feed_forward_hidden_states)
             
             router_tuple = (router_logits, expert_index)
             # return hidden_states, (router_logits, expert_index)
