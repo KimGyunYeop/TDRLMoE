@@ -123,6 +123,10 @@ class TestEvaluationCallback(TrainerCallback):
             
         print(f"Test metrics at epoch {state.epoch}: {test_metrics}")
         wandb.log({f"test_{k}": v for k, v in test_metrics.items()})
+        
+        #save model
+        self.trainer.save_model(os.path.join(self.output_dir, f"epoch_{state.epoch}"))
+        
         return control
 # ---------------------------------------------------------
 # RL Activation Callback: 각 에폭 시작 시 RL_start_epoch 기준으로 RL 활성화 여부 결정
