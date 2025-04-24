@@ -128,6 +128,10 @@ class TestEvaluationCallback(TrainerCallback):
         wandb.log({f"test_{k}": v for k, v in test_metrics.items()})
         
         
+        #save model
+        self.trainer.save_model(os.path.join(self.output_dir, f"epoch_{state.epoch}"))
+        
+        
         return control
 
 # ---------------------------------------------------------

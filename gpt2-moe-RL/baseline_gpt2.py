@@ -112,6 +112,10 @@ class TestEvaluationCallback(TrainerCallback):
             json.dump({k: round(v, 4) for k, v in test_metrics.items()}, f, indent=4)
         print("Evaluation results:", test_metrics)
         wandb.log({f"test_{k}": v for k, v in test_metrics.items()})
+        
+        #save model
+        self.trainer.save_model(os.path.join(self.output_dir, f"epoch_{state.epoch}"))
+        
         return control
 
 def tokenize_function(examples, tokenizer):
