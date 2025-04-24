@@ -66,6 +66,9 @@ def parse_args():
     parser.add_argument("--RL_start_epoch", type=int, default=0)
     parser.add_argument("--RL_algo", default="ppo", help="RL type", choices=["reinforce", "ppo"])
     parser.add_argument("--RL_ppo_eps", type=float, default=0.2, help="RL PPO epsilon")
+    
+    parser.add_argument("--from_scratch", action="store_true", default=False, help="Train from scratch")
+    
     return parser.parse_args()
 
 class CustomTrainer(Trainer):
@@ -172,7 +175,7 @@ def main():
     task = "text_generation"
     args.task = task
 
-    exp_name = f"{args.dataset_name}-{args.model_name.replace('/', '-')}-{task}-{args.num_train_epochs}epochs_final"
+    exp_name = f"{args.dataset_name}-{args.model_name.replace('/', '-')}-{task}-{args.num_train_epochs}epochs_final{'_from_scratch' if args.from_scratch else ''}"
     output_dir = os.path.join("results", exp_name, args.run_name)
     os.makedirs(output_dir, exist_ok=True)
     wandb.init(project=exp_name, name=args.run_name)
@@ -243,8 +246,15 @@ def main():
         device_map="auto",
     )
     model.to_moe()  # MOE 적용 (사용자 정의 함수)
+    
+    if args.from_scratch:
+        with torch.no_grad():
+            model.resize_token_embeddings(len(tokenizer))
+            model.init_weights()
+            model.tie_weights()
+            print("Model weights initialized from scratch")
+            
     print(model)
-
 
     # 초기 RL 상태는 RL_start_epoch에 따라 설정 (첫 에폭 시작 전 설정)
     if args.do_RL and 0 >= args.RL_start_epoch:

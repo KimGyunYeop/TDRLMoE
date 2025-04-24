@@ -15,6 +15,7 @@ from transformers import (
     TrainerCallback,
     AutoConfig,
 )
+import torch
 # from transformers import GPT2LMHeadModel
 # nltk 문장 토크나이저 다운로드 (없으면)
 try:
@@ -49,6 +50,8 @@ def parse_args():
     parser.add_argument("--gen_max_length", type=int, default=128, help="Maximum generation length")
     parser.add_argument("--gen_no_repeat_ngram_size", type=int, default=5, help="No repeat ngram size")
     parser.add_argument("--gen_num_beams", type=int, default=6, help="Number of beams for generation")
+    
+    parser.add_argument("--from_scratch", action="store_true", default=False, help="Train from scratch")
     
     parser.add_argument("--mode", type=str, default="base", choices=["base", "dense", "share"], help="Switch Transformer mode")
     return parser.parse_args()
@@ -132,7 +135,7 @@ def main():
     task = "text_generation"
     args.task = task
 
-    exp_name = f"{args.dataset_name}-{args.model_name.replace('/', '-')}-{task}-{args.num_train_epochs}epochs_final"
+    exp_name = f"{args.dataset_name}-{args.model_name.replace('/', '-')}-{task}-{args.num_train_epochs}epochs_final{'_from_scratch' if args.from_scratch else ''}"
     output_dir = os.path.join("results", exp_name, args.run_name)
     os.makedirs(output_dir, exist_ok=True)
     wandb.init(project=exp_name, name=args.run_name)
@@ -205,7 +208,13 @@ def main():
         )
         model.to_moe()  # MOE 적용 (사용자 정의 함수)
         model.make_share_expert()
-        
+    
+    if args.from_scratch:
+        with torch.no_grad():
+            model.resize_token_embeddings(len(tokenizer))
+            model.init_weights()
+            model.tie_weights()
+            print("Model weights initialized from scratch")
     print(model)
 
     data_collator = DataCollatorForLanguageModeling(
