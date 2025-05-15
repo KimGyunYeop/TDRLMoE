@@ -3,33 +3,33 @@ import pandas as pd
 import matplotlib.pyplot as plt
 
 # 1. 필터 조건: 모든 조건을 만족하는 실험만 포함
-# title = "SAMSUM"
-# ENTITY = "isnlp_lab"
-# PROJECT = "samsum-google-switch-base-8-summarization-15epochs_final"
-# config_filter = {
-#     "RL_loss_coef": 2.0,
-#     "use_sample_lm_loss": False,
-# }
-# x_key = "RL_expert_change_ratio"
-# x_key_name = x_key.split("_")[-1]
-# end_key = "best_test_rouge2"
-# get_type = "last"
-# measurement_value = "test_rouge2"
-# measurement_value_name = measurement_value.split("_")[-1]
-
-title = "WIKI-2"
+title = "SAMSUM"
 ENTITY = "isnlp_lab"
-PROJECT = "wikitext-2-gpt2-text_generation-15epochs_final"
+PROJECT = "samsum-google-switch-base-8-summarization-15epochs_final"
 config_filter = {
     "RL_loss_coef": 2.0,
-    "use_sample_lm_loss": True,
+    "use_sample_lm_loss": False,
 }
 x_key = "RL_expert_change_ratio"
 x_key_name = x_key.split("_")[-1]
-end_key = "best_test_perplexity"
-get_type = "min"
-measurement_value = "test_perplexity"
+end_key = "best_test_rouge2"
+get_type = "last"
+measurement_value = "test_rouge2"
 measurement_value_name = measurement_value.split("_")[-1]
+
+# title = "WIKI-2"
+# ENTITY = "isnlp_lab"
+# PROJECT = "wikitext-2-gpt2-text_generation-15epochs_final"
+# config_filter = {
+#     "RL_loss_coef": 2.0,
+#     "use_sample_lm_loss": True,
+# }
+# x_key = "RL_expert_change_ratio"
+# x_key_name = x_key.split("_")[-1]
+# end_key = "best_test_perplexity"
+# get_type = "min"
+# measurement_value = "test_perplexity"
+# measurement_value_name = measurement_value.split("_")[-1]
 
 # 3. W&B API 접속
 api = wandb.Api()
