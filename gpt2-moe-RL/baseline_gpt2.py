@@ -139,7 +139,7 @@ def main():
     task = "text_generation"
     args.task = task
 
-    exp_name = f"{args.dataset_name}-{args.model_name.replace('/', '-')}-{task}-{args.num_train_epochs}epochs_final{'_from_scratch' if args.from_scratch else ''}"
+    exp_name = f"{args.dataset_name}-{args.model_name.replace('/', '-')}-{task}-{args.num_train_epochs}epochs_withcapa{'_from_scratch' if args.from_scratch else ''}"
     output_dir = os.path.join("results", exp_name, args.run_name)
     os.makedirs(output_dir, exist_ok=True)
     wandb.init(project=exp_name, name=args.run_name)
@@ -153,7 +153,7 @@ def main():
 
     # 토크나이저 로드
     tokenizer = AutoTokenizer.from_pretrained(args.model_name)
-    if args.model_name == "gpt2":
+    if "gpt2" in args.model_name:
         tokenizer.pad_token = tokenizer.eos_token
 
     # 전처리: 토큰화 & 그룹핑
@@ -180,7 +180,7 @@ def main():
     model_config = AutoConfig.from_pretrained(args.model_name)
     moe_config = AutoConfig.from_pretrained(args.moe_config_path)
     model_config.num_experts = moe_config.num_experts
-    model_config.expert_capacity = moe_config.expert_capacity
+    model_config.expert_capacity = 256
     model_config.router_bias = moe_config.router_bias
     model_config.router_jitter_noise = moe_config.router_jitter_noise
     model_config.router_dtype = moe_config.router_dtype
@@ -219,6 +219,7 @@ def main():
             model.init_weights()
             model.tie_weights()
             print("Model weights initialized from scratch")
+            
     print(model)
 
     data_collator = DataCollatorForLanguageModeling(
@@ -240,7 +241,6 @@ def main():
         per_device_train_batch_size=args.per_device_train_batch_size,
         per_device_eval_batch_size=args.per_device_eval_batch_size,
         num_train_epochs=args.num_train_epochs,
-        weight_decay=0.1,
         logging_steps=args.logging_steps,
         save_steps=eval_steps,
         report_to=["wandb"],

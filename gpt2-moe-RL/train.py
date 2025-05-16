@@ -62,7 +62,7 @@ def parse_args():
     parser.add_argument("--RL_sample_stretegy", type=str, default="multinomial", help="RL sample strategy", choices=["multinomial", "random"])
     parser.add_argument("--RL_base_logit_type", type=str, default="top1", help="RL base logit type", choices=["top1", "mean"])
     parser.add_argument("--RL_reward_stretegy", type=str, default="static", help="RL reward strategy", choices=["minus", "static", "positive", "clamp", "log"])
-    parser.add_argument("--use_sample_lm_loss", action="store_true", default=True, help="Use sample LM loss in RL")
+    parser.add_argument("--use_sample_lm_loss", action="store_true", default=False, help="Use sample LM loss in RL")
     parser.add_argument("--RL_start_epoch", type=int, default=0)
     parser.add_argument("--RL_algo", default="ppo", help="RL type", choices=["reinforce", "ppo"])
     parser.add_argument("--RL_ppo_eps", type=float, default=0.2, help="RL PPO epsilon")
@@ -179,7 +179,7 @@ def main():
     task = "text_generation"
     args.task = task
 
-    exp_name = f"{args.dataset_name}-{args.model_name.replace('/', '-')}-{task}-{args.num_train_epochs}epochs_final{'_from_scratch' if args.from_scratch else ''}"
+    exp_name = f"{args.dataset_name}-{args.model_name.replace('/', '-')}-{task}-{args.num_train_epochs}epochs_withcapa{'_from_scratch' if args.from_scratch else ''}"
     output_dir = os.path.join("results", exp_name, args.run_name)
     os.makedirs(output_dir, exist_ok=True)
     wandb.init(project=exp_name, name=args.run_name)
@@ -193,7 +193,7 @@ def main():
 
     # 토크나이저 로드
     tokenizer = AutoTokenizer.from_pretrained(args.model_name)
-    if args.model_name == "gpt2":
+    if "gpt2" in args.model_name:
         tokenizer.pad_token = tokenizer.eos_token
 
     # 전처리: 토큰화 & 그룹핑
@@ -222,7 +222,7 @@ def main():
     
     # MOE 관련 설정 추가
     model_config.num_experts = moe_config.num_experts
-    model_config.expert_capacity = moe_config.expert_capacity
+    model_config.expert_capacity = 256
     model_config.router_bias = moe_config.router_bias
     model_config.router_jitter_noise = moe_config.router_jitter_noise
     model_config.router_dtype = moe_config.router_dtype
@@ -290,14 +290,13 @@ def main():
         per_device_train_batch_size=args.per_device_train_batch_size,
         per_device_eval_batch_size=args.per_device_eval_batch_size,
         num_train_epochs=args.num_train_epochs,
-        weight_decay=0.1,
         logging_steps=args.logging_steps,
         save_steps=eval_steps,
         report_to=["wandb"],
         run_name=args.run_name,
         seed=args.seed,
         fp16=args.fp16,
-        save_total_limit=3,
+        save_total_limit=1,
         # eval_accumulation_steps=5,
         prediction_loss_only=True,
         save_safetensors=False,

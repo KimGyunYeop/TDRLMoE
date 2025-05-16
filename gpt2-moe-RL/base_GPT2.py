@@ -190,7 +190,7 @@ class GPT2Config(PretrainedConfig):
         scale_attn_by_inverse_layer_idx=False,
         reorder_and_upcast_attn=False,
         num_experts=8,#added
-        expert_capacity=64,
+        expert_capacity=512,
         router_bias=False,
         router_jitter_noise=0.01,
         router_dtype="float32",
@@ -485,12 +485,12 @@ class GPT2Top1Router(nn.Module):
         expert_index = torch.nn.functional.one_hot(expert_index, num_classes=self.num_experts)
         
         #delete fix here for gpt2 pre-trained like result at initalization
-        # Mask tokens outside expert capacity. Sum over each sequence
+        # # Mask tokens outside expert capacity. Sum over each sequence
         # token_priority = torch.cumsum(expert_index, dim=-2)
         # # mask if the token routed to to the expert will overflow
         # expert_capacity_mask = token_priority <= self.expert_capacity
         # expert_index = expert_index * expert_capacity_mask
-
+        
         router_probs = torch.max(router_probs, dim=-1).values.unsqueeze(-1)
         return expert_index, router_probs, router_logits
 
@@ -714,12 +714,15 @@ class GPT2MLP(nn.Module):
         return hidden_states
 
 
+import copy
 class GPT2Block(nn.Module):
     def __init__(self, config, layer_idx=None):
         super().__init__()
         self.config = config
         hidden_size = config.hidden_size
         inner_dim = config.n_inner if config.n_inner is not None else 4 * hidden_size
+        self.inner_dim = inner_dim
+        self.config = config
 
         self.ln_1 = nn.LayerNorm(hidden_size, eps=config.layer_norm_epsilon)
         self.attn = GPT2Attention(config=config, layer_idx=layer_idx)
@@ -735,11 +738,18 @@ class GPT2Block(nn.Module):
         
         self.layer_idx = layer_idx
         
+        # if self.layer_idx > 0 and (self.layer_idx+1) % 2 == 0:
+        #     self.se = GPT2MLP(inner_dim, config)
+        #     self.e = nn.ModuleDict()
+        #     for idx in range(self.config.num_experts):
+        #         self.e[f"expert_{idx}"] = GPT2MLP(inner_dim, config)
+                
         # import copy
         # self.experts = nn.ModuleDict()
         # for idx in range(self.config.num_experts):
         #     self.experts[f"expert_{idx}"] = copy.deepcopy(self.mlp)
         #     # self.experts[f"expert_{idx}"].to(self.mlp.device)
+        # self.to_moe()
         
     
     def to_moe(self):
@@ -752,20 +762,30 @@ class GPT2Block(nn.Module):
         
         import copy
         self.experts = nn.ModuleDict()
+        self.router.classifier.weight.data.normal_(mean=0.0, std=1)
+        # self.router.classifier.weight.data.zero_()
         for idx in range(self.config.num_experts):
             if self.layer_idx > 0 and (self.layer_idx+1) % 2 == 0:
                 self.is_sparse = True
+                # self.experts[f"expert_{idx}"] = self.e[f"expert_{idx}"]
                 self.experts[f"expert_{idx}"] = copy.deepcopy(self.mlp)
             else:
                 self.is_sparse = False
         
-        if self.is_sparse:
-            del self.mlp
+        # if self.is_sparse:
+        #     del self.mlp
+        
+        print(f"{self.layer_idx} layer is {self.is_sparse} sparse")
         
     def make_share_expert(self):
         import copy
         if self.is_sparse:
             self.share_expert = copy.deepcopy(getattr(self.experts, "expert_{}".format(0)))
+            # self.share_expert = self.se
+            # self.share_expert.c_fc.weight.data.normal_(mean=0.0, std=self.config.initializer_range)
+            # self.share_expert.c_proj.weight.data.normal_(mean=0.0, std=(self.config.initializer_range / math.sqrt(2 * self.config.n_layer)))
+            # self.share_expert.c_fc.bias.data.zero_()
+            # self.share_expert.c_proj.bias.data.zero_()
 
     def forward(
         self,
@@ -839,6 +859,12 @@ class GPT2Block(nn.Module):
                     hidden_states[router_mask[:, :, idx]]
                 )
 
+            # print("router_probs", router_probs)
+            # print("router_probs.shape", router_probs.shape)
+            # # print("next_states", next_states)
+            # print("next_states.shape", next_states.shape)
+            # print("feed_forward_hidden_states", next_states.shape)
+            # print("feed_forward_hidden_states.shape", next_states.shape)
             # feed_forward_hidden_states = router_probs * next_states
             feed_forward_hidden_states = next_states #without router_probs scaling
             
@@ -851,6 +877,7 @@ class GPT2Block(nn.Module):
             feed_forward_hidden_states = self.mlp(hidden_states)
             router_tuple = (torch.zeros((1,), device=feed_forward_hidden_states.device, dtype=torch.int64),)
         # residual connection
+        # hidden_states = residual + self.dorpout(feed_forward_hidden_states)
         hidden_states = residual + feed_forward_hidden_states
 
         if use_cache:
@@ -1652,7 +1679,7 @@ class GPT2LMHeadModel(GPT2PreTrainedModel, GenerationMixin):
             return ((loss, lm_loss, z_loss, aux_loss) + output) if loss is not None else output
 
         return CustomCausalLMOutputWithCrossAttentions(
-            loss=loss,
+            loss=loss if self.training else lm_loss,
             lm_loss=lm_loss,
             z_loss=z_loss,
             aux_loss=aux_loss,
